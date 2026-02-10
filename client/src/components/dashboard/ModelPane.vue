@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="panel">
     <div class="flex items-center justify-between gap-3 mb-3">
       <div>
@@ -19,7 +19,7 @@
     </div>
 
     <div class="flex flex-col gap-4">
-      <VideoWithOverlay :slotName="slotName" @upload="onUpload" />
+      <VideoWithOverlay :slotName="slotName" :video-src="videoSrc" />
       <BeamPanel :slotName="slotName" />
     </div>
   </div>
@@ -33,15 +33,14 @@ const props = defineProps({
   mode: { type: String, required: true },
   slotName: { type: String, required: true }, // 'A' | 'B'
   title: { type: String, required: true },
+  videoSrc: { type: String, default: "" },
 });
 
 function onLoadModel() {
-  // TODO: 파일 선택 → FastAPI 업로드 → slot(A/B) assign
   alert(`[${props.slotName}] Load Model (TODO)`);
 }
 
 function onTestPing() {
-  // TODO: /health 또는 ws 연결 테스트
   alert(`[${props.slotName}] Test (TODO)`);
 }
 </script>

@@ -5,38 +5,23 @@
       <div class="text-xs text-slate-500">Slot {{ slotName }}</div>
     </div>
 
-    <div
-      class="video-wrap"
-      style="height: 420px;"
-      @click="openFilePicker"
-      @dragover="onDragOver"
-      @drop="onDrop"
-    >
-      <input
-        ref="fileInput"
-        type="file"
-        accept="video/*"
-        class="hidden"
-        @change="onFileChange"
-      />
-
+    <div class="video-wrap" style="height: 420px;">
       <video
         v-if="videoSrc"
         ref="videoEl"
         class="video-el"
         :src="videoSrc"
-        preload="metadata"
+        autoplay
+        muted
         playsinline
         controls
         @play="isPlaying = true"
         @pause="isPlaying = false"
-        @loadedmetadata="onMeta"
-        @error="onErr"
       />
 
       <div v-else class="video-placeholder">
         <div class="text-xs text-slate-500 mt-1">
-          Drop a video or click to select
+          Upload once above to play in both panels
         </div>
       </div>
 
@@ -44,109 +29,32 @@
     </div>
 
     <div class="mt-2 flex items-center gap-2 text-xs text-slate-600">
-      <button
-        v-if="videoSrc"
-        class="ui-btn-secondary"
-        type="button"
-        @click="togglePlay"
-      >
-        {{ isPlaying ? "Pause" : "Play" }}
-      </button>
-      <span v-if="selectedFile">{{ selectedFile.name }}</span>
-      <span v-else>Overlay: bbox / id / center (WS JSON) ??canvas draw (TODO)</span>
+      <span v-if="videoSrc">{{ isPlaying ? "Playing" : "Paused" }}</span>
+      <span v-else>Overlay: bbox / id / center (WS JSON) -> canvas draw (TODO)</span>
     </div>
   </div>
 </template>
 
 <script setup>
-import { nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { onMounted, ref, watch, nextTick } from "vue";
 
 const props = defineProps({
   slotName: { type: String, required: true },
+  videoSrc: { type: String, default: "" },
 });
 
 const overlay = ref(null);
-const fileInput = ref(null);
 const videoEl = ref(null);
-const selectedFile = ref(null);
-const videoSrc = ref("");
 const isPlaying = ref(false);
-let objectUrl = null;
 
-const emit = defineEmits(["upload"]);
-
-function openFilePicker() {
-  fileInput.value?.click();
-}
-
-function handleFiles(files) {
-  console.log("canPlay mp4:", videoEl.value?.canPlayType(selectedFile.value?.type || "video/mp4"));
-  
-  const file = files?.[0];
-
-  const probe = document.createElement("video");
-  console.log("file.type:", file.type);
-  console.log("canPlayType(file.type):", probe.canPlayType(file.type || "video/mp4"));
-  console.log("canPlayType(H.264 baseline):", probe.canPlayType('video/mp4; codecs="avc1.42E01E, mp4a.40.2"'));
-  console.log("canPlayType(H.265/HEVC):", probe.canPlayType('video/mp4; codecs="hvc1"'));
-  console.log("canPlayType(AV1):", probe.canPlayType('video/mp4; codecs="av01.0.05M.08"'));
-
-  if (!file) return;
-  selectedFile.value = file;
-  if (objectUrl) URL.revokeObjectURL(objectUrl);
-  objectUrl = URL.createObjectURL(file);
-  videoSrc.value = objectUrl;
-  nextTick(async () => {
-    if (!videoEl.value) return;
+watch(
+  () => props.videoSrc,
+  (src) => {
+    if (!src || !videoEl.value) return;
     videoEl.value.load();
-    try {
-      await videoEl.value.play();
-      console.log("play success");
-    } catch (err) {
-      console.error("play failed:", err);
-    }
-  });
-  emit("upload", { slot: props.slotName, file });
-}
-
-function onFileChange(e) {
-  handleFiles(e.target.files);
-}
-
-function onDrop(e) {
-  e.preventDefault();
-  handleFiles(e.dataTransfer.files);
-}
-
-function onDragOver(e) {
-  e.preventDefault();
-}
-
-function togglePlay() {
-  if (!videoEl.value) return;
-  if (videoEl.value.paused) {
-    videoEl.value.play().catch(() => {});
-  } else {
-    videoEl.value.pause();
+    nextTick(() => videoEl.value?.play().catch(() => {}));
   }
-}
-
-// 동영상 에러 로그 확인 -----------------------------------
-function onMeta() {
-  console.log("metadata loaded",
-    videoEl.value.videoWidth,
-    videoEl.value.videoHeight,
-    videoEl.value.duration
-  );
-}
-// -------------------------------------------------------
-function onErr() {
-  console.error("video error:", videoEl.value?.error);
-}
-
-onBeforeUnmount(() => {
-  if (objectUrl) URL.revokeObjectURL(objectUrl);
-});
+);
 
 onMounted(() => {
   const c = overlay.value;
