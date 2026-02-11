@@ -941,8 +941,8 @@ class VideoCropExtractorApp:
 # =========================================================
 # Run
 # =========================================================
-if __name__ == "__main__":
-    root = tk.Tk()
-    app = VideoCropExtractorApp(root)
-    root.protocol("WM_DELETE_WINDOW", app.on_close)
-    root.mainloop()
+if __name__ == "__main__":                              # 다른곳에서 import 하는 경우는 main임
+    root = tk.Tk()                                      # tk 기본 창 생성
+    app = VideoCropExtractorApp(root)                   # 커스텀 클래스 호출
+    root.protocol("WM_DELETE_WINDOW", app.on_close)     # 창 닫기 기능에 커스텀 함수 연결
+    root.mainloop()                                     # 프로그램 활성화
