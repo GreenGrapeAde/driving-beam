@@ -19,7 +19,20 @@
     </div>
 
     <div class="flex flex-col gap-4">
-      <VideoWithOverlay :slotName="slotName" :video-src="videoSrc" />
+      <VideoWithOverlay
+        :slotName="slotName"
+        :video-src="videoSrc"
+        :play-token="playToken"
+        :pause-token="pauseToken"
+        :volume="volume"
+        :seek-token="seekToken"
+        :seek-fraction="seekFraction"
+        :mode="mode"
+        @play="$emit('play')"
+        @pause="$emit('pause')"
+        @volume-change="$emit('volume-change', $event)"
+        @seek="$emit('seek', $event)"
+      />
       <BeamPanel :slotName="slotName" />
     </div>
   </div>
@@ -34,7 +47,14 @@ const props = defineProps({
   slotName: { type: String, required: true }, // 'A' | 'B'
   title: { type: String, required: true },
   videoSrc: { type: String, default: "" },
+  playToken: { type: Number, default: 0 },
+  pauseToken: { type: Number, default: 0 },
+  volume: { type: Number, default: 0.5 },
+  seekToken: { type: Number, default: 0 },
+  seekFraction: { type: Number, default: 0 },
 });
+
+const emit = defineEmits(["play", "pause", "volume-change", "seek"]);
 
 function onLoadModel() {
   alert(`[${props.slotName}] Load Model (TODO)`);
