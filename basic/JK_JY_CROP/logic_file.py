@@ -1,57 +1,104 @@
-## ========================================================
+## ================================================================
 ## 모듈 로딩
-## ========================================================
+## ================================================================
 import os
 import cv2
 
-from PyQt5.QtWidgets import *
-from PyQt5 import uic                       # Qt Designer로 만든 ui파일 -> python 코드
-from PyQt5.QtGui import QImage, QPixmap     # QImage: 이미지 데이터
-                                            # QPixmap: QLabel 등에 표시용 이미지
-from PyQt5.QtCore import QTimer             # 일정 시간마다 특정 함수를 반복 실행할 타이머
 
-
-## ========================================================
-## 영상 파일 열기
-## ========================================================
+## ================================================================
+## 영상 업로드 :: 영상을 프레임 형태로 변환
+## ================================================================
 def load_video(path):
-    cap = cv2.VideoCapture(path)
-    return cap
+    return cv2.VideoCapture(path)
 
 
-## ========================================================
-## 영상 재생 시작
-## ========================================================
+## ================================================================
+## 영상 재생 :: 프레임을 33ms 간격으로 읽음
+## ================================================================
 def start_video(timer):
-    timer.start(30)    # 30ms마다 timeout 발생 -> 약 33fps (1초/0.03초 ≈ 33)
+    timer.start(33)  # 약 1000ms/33ms= 30fps
 
 
-## ========================================================
-## 영상 프레임을 읽어서 QLabel에 띄우는 함수
-## ========================================================
-def display_frame(self):
-    self.current_frame = frame.copy()
+## ================================================================
+## x, y좌표 반환
+## ================================================================
+def xy_point(px, py, frame_w, frame_h, label_w, label_h):
+    """
+    QLabel에 영상을 띄웠을 때 생기는 여백을 고려해서
+    label 좌표(px, py)를 frame 좌표(fx, fy)로 변환
+    """
+
+    ## 유효성 체크 
+    if frame_w <= 0 or frame_h <= 0 or label_w <= 0 or label_h <= 0:
+        return 0, 0
+
+    ## 영상을 Qlabel 사이즈에 맞게 넣기
+    scale = min(label_w / frame_w, label_h / frame_h)
+    disp_w = frame_w * scale
+    disp_h = frame_h * scale
+
+    ## 여백 처리(가운데 정렬)
+    off_x = (label_w - disp_w) / 2.0
+    off_y = (label_h - disp_h) / 2.0
+
+    ## 영상기준 마우스 좌표
+    ## 여백에 마우스 크롭할 경우 좌표 0
+    x = min(max(px - off_x, 0.0), disp_w)   
+    y = min(max(py - off_y, 0.0), disp_h)
+
+    ## 원본 영상 기준으로 변환
+    ## 위에서 곱하기 scale로 사이즈를 바꿨으니 다시 나누기로 복구
+    fx = int(x / scale)
+    fy = int(y / scale)
+
+    # # frame 경계 clamp
+    # fx = max(0, min(frame_w - 1, fx))
+    # fy = max(0, min(frame_h - 1, fy))
+
+    return fx, fy
 
 
-    if not self.cap:        ## 영상 로드 안 됐으면 아무것도 하지 않음
-        return
+## ================================================================
+## ROI 계산
+## ================================================================
+def calc_roi(drag_start, drag_end, frame_shape, label_size):
+    """
+    drag_start/drag_end: QPoint
+    frame_shape         : (h, w, c)
+    label_size          : (lw, lh)
+    return              : (fx1, fy1, fx2, fy2)
+    """
+    h, w, _ = frame_shape
+    lw, lh = label_size
 
-    ret, frame = self.cap.read()        ## 영상에서 프레임(한 장의 이미지)을 읽음
+    p1x, p1y = drag_start.x(), drag_start.y()
+    p2x, p2y = drag_end.x(), drag_end.y()
 
-    if not ret:                 ## 프레임 못 읽을 경우
-        self.timer.stop()
-        self.cap.release()      ## 영상 닫기
-        return
+    ## 원본 프레임 기준 좌표
+    fx1, fy1 = xy_point(p1x, p1y, w, h, lw, lh)
+    fx2, fy2 = xy_point(p2x, p2y, w, h, lw, lh)
 
-    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)  ## 색상 변환해야 색이 정상으로 보임
-    h, w, c = frame.shape
+    ## 드래그 방향에 따라 재정렬
+    x1, x2 = sorted([fx1, fx2])
+    y1, y2 = sorted([fy1, fy2])
 
-    ## w*c: 한 줄(가로 한 줄)
-    ## QImage.Format_RGB888: RGB 3채널(24bit) 형식
-    q_img = QImage(frame.data, w, h, w * c, QImage.Format_RGB888)
-    pixmap = QPixmap.fromImage(q_img)  # QImage QPixmap으로 변환
+    return x1, y1, x2, y2
 
-    ## QLabel 크기에 맞게 이미지 리사이즈
-    self.image.setPixmap(
-        pixmap.scaled(self.image.width(), self.image.height())
-    )
+
+## ================================================================
+## 크롭된 이미지
+## ================================================================
+def crop_frame(frame, roi):
+    fx1, fy1, fx2, fy2 = roi
+    return frame[fy1:fy2, fx1:fx2]
+
+
+## ================================================================
+## 크롭 이미지 저장
+## ================================================================
+def save_roi_image(roi_img, save_dir, base_name, index):
+    os.makedirs(save_dir, exist_ok=True)
+    filename = os.path.join(save_dir, f"{base_name}_{index:03d}.bmp")
+
+    ok = cv2.imwrite(filename, cv2.cvtColor(roi_img, cv2.COLOR_RGB2BGR))
+    return ok, filename

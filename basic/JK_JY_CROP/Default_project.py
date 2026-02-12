@@ -1,31 +1,34 @@
-## ========================================================
+## ================================================================
 ## 모듈 로딩
-## ========================================================
-from re import X
+## ================================================================
 import sys
 import os
 import cv2
-import time
 
 from PyQt5.QtWidgets import *
-from PyQt5 import uic                       # Qt Designer로 만든 ui파일 -> python 코드
-from PyQt5.QtGui import QImage, QPixmap     # QImage: 이미지 데이터
-from PyQt5.QtCore import QEvent
-                                            # QPixmap: QLabel 등에 표시용 이미지
-from PyQt5.QtCore import QTimer             # 일정 시간마다 특정 함수를 반복 실행할 타이머
+from PyQt5 import uic
+from PyQt5.QtGui import QImage, QPixmap
+from PyQt5.QtCore import QTimer, QEvent, Qt
 
-import logic_file
+import logic_file      ## 함수 파일
 
 
-## ========================================================
-## UI 불러오기
-## ========================================================
+## ================================================================
+## UI Class 불러오기
+## ================================================================
 form_class = uic.loadUiType("PYTORCH_UI.ui")[0]
+base_class = uic.loadUiType("PYTORCH_UI.ui")[1]
 
-class MyWork(QWidget, form_class):  ## QMainWindow(메인창) / form_class(.ui에 있는 위젯들)
+
+## ================================================================
+## 클래스 정의
+## ================================================================
+class Program(base_class, form_class):
     def __init__(self):
         super().__init__()
-        self.setupUi(self)  ## 부모클래스 초기화
+        self.setupUi(self)
+
+        self.image.setAlignment(Qt.AlignCenter)
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.on_timer)
@@ -33,200 +36,135 @@ class MyWork(QWidget, form_class):  ## QMainWindow(메인창) / form_class(.ui�
         self.crop_timer = QTimer(self)
         self.crop_timer.timeout.connect(self.auto_crop)
 
-        self.video_path = None
         self.cap = None
+        self.current_frame = None  # 원본 프레임
 
-        ## 영상추출함수에 필요
-        self.extract_mode = False   # 이미지 추출 모드인지
+        self.extract_mode = False
         self.drag_start = None
         self.drag_end = None
-        self.current_frame = None  # 현재 프레임 저장용
 
-        self.video_base_name = None   # 영상 파일명 (확장자 제거)
-        self.roi_index = 0            # ROI 카운터
-
-        self.crop_remain_frames = 0
         self.crop_roi = None
+        self.crop_remain_frames = 0
+        self.total_save_count = 0
+        self.roi_index = 0
 
+        self.video_base_name = None
         self.save_dir = None
 
         self.image.setMouseTracking(True)
-        self.image.installEventFilter(self)   # QLabel 이벤트 받기
+        self.image.installEventFilter(self)
 
-        ## 영상 불러오기 버튼
         self.pushButton.clicked.connect(self.on_click_open_video)
-        ## 출력 폴더 지정 버튼
         self.pushButton_2.clicked.connect(self.save_folder)
-        ## 이미지 추출 버튼
         self.pushButton_3.clicked.connect(self.on_click_extract)
 
-    ## ========================================================
+    ## ============================================
     ## 영상 불러오기 버튼
-    ## ========================================================
+    ## ============================================
     def on_click_open_video(self):
         f_path, _ = QFileDialog.getOpenFileName(
             self,
-            '파일 선택',                   # 다이얼로그 제목
-            '',                            # 시작 폴더(빈 문자열이면 기본 위치)
-            'Video Files (*.mp4 *.avi)'  # 선택 가능한 파일 확장자
+            '파일 선택',
+            '',
+            'Video Files (*.mp4 *.avi)'
         )
 
-        if f_path:
-            self.video_path = f_path
-            self.cap = logic_file.load_video(f_path)
+        if not f_path:        ## 취소 눌렀을 때 방어
+            return
 
-            ## 파일명(확장자 제거)
-            self.video_base_name = os.path.splitext(
-                os.path.basename(f_path))[0]
-            
-            self.roi_index = 0  ## 새 영상 열면 카운터 리셋
-            
-            w = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            h = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            fps = self.cap.get(cv2.CAP_PROP_FPS)
+        self.cap = logic_file.load_video(f_path)
+        if not self.cap.isOpened():   ## 영상 열기 실패 방어
+            QMessageBox.warning(self, "오류", "영상을 열 수 없습니다.")
+            return
 
-            ## UI에 반영
-            self.edit_w.setText(str(w))
-            self.edit_h.setText(str(h))
-            self.edit_fps.setText(f"{fps:.2f}")
+        self.video_base_name = os.path.splitext(os.path.basename(f_path))[0]
 
-            logic_file.start_video(self.timer)
+        #---------------------------
+        # 영상 기본정보 UI에 표시
+        # --------------------------
+        w = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps = self.cap.get(cv2.CAP_PROP_FPS)
+
+        frame_count = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+        self.edit_w.setText(str(w))
+        self.edit_h.setText(str(h))
+        self.edit_fps.setText(f"{fps:.2f}")
+
+        # 재생 시작
+        logic_file.start_video(self.timer)
 
 
-    ## ========================================================
+    ## ============================================
     ## 출력 폴더 지정 버튼
-    ## ========================================================
+    ## ============================================
     def save_folder(self):
-        folder_path = QFileDialog.getExistingDirectory(
-            self,
-            '저장 폴더 선택',   ## 다이얼로그 제목
-            ''                ## 시작 폴더
-        )
+        folder = QFileDialog.getExistingDirectory(self, "저장 폴더 선택")
 
-        if folder_path:
-            self.save_dir = folder_path
-            print("저장 폴더:", self.save_dir)
+        if folder:
+            self.save_dir = folder
 
-    
-    ## ========================================================
+
+    ## ============================================
     ## 이미지 추출 버튼
-    ## ========================================================
+    ## ============================================
     def on_click_extract(self):
-        print("마우스로 영상에서 영역을 드래그하세요")
-
+        if self.current_frame is None:
+            QMessageBox.warning(self, "오류", "먼저 영상을 재생하세요.")
+            return
+        
         self.extract_mode = True
         self.drag_start = None
         self.drag_end = None
 
+        print("마우스로 ROI 영역을 드래그하세요")
 
-    ## ========================================================
-    ## 타이머 연결
-    ## ========================================================
+
+    ## ============================================
+    ## 이미지 추출 버튼
+    ## ============================================
     def on_timer(self):
-        if self.cap is None:
+        if not self.cap:
             return
 
         ret, frame = self.cap.read()
         if not ret:
             self.timer.stop()
-            self.cap.release()
             return
 
+        # RGB로 변환 + 원본 저장
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         self.current_frame = frame.copy()
 
-        # ROI 네모 표시
+        # 화면 표시용 프레임 (ROI 사각형은 여기에만 그림)
+        display = frame.copy()
+
         if self.extract_mode and self.drag_start and self.drag_end:
-            x1 = min(self.drag_start.x(), self.drag_end.x())
-            y1 = min(self.drag_start.y(), self.drag_end.y())
-            x2 = max(self.drag_start.x(), self.drag_end.x())
-            y2 = max(self.drag_start.y(), self.drag_end.y())
+            fx1, fy1, fx2, fy2 = logic_file.calc_roi(
+                self.drag_start,
+                self.drag_end,
+                display.shape,
+                (self.image.width(), self.image.height())
+            )
 
-            h, w, _ = frame.shape
-            lw = self.image.width()
-            lh = self.image.height()
+            ## 초록색 테두리 그리기
+            cv2.rectangle(display, (fx1, fy1), (fx2, fy2), (0, 255, 0), 2)
 
-            fx1 = int(x1 * w / lw)
-            fy1 = int(y1 * h / lh)
-            fx2 = int(x2 * w / lw)
-            fy2 = int(y2 * h / lh)
+        ## QT창에 영상 출력
+        h, w, c = display.shape
+        qimg = QImage(display.data, w, h, w * c, QImage.Format_RGB888)
+        pix = QPixmap.fromImage(qimg)
 
-            cv2.rectangle(frame, (fx1, fy1), (fx2, fy2), (0, 255, 0), 2)
-
-        h, w, c = frame.shape
-        q_img = QImage(frame.data, w, h, w * c, QImage.Format_RGB888)
-        pixmap = QPixmap.fromImage(q_img)
-
+        # QLabel에 실제로 넣기
         self.image.setPixmap(
-            pixmap.scaled(self.image.width(), self.image.height())
+            pix.scaled(self.image.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
         )
 
 
-    ## ========================================================
-    ## 마우스 쿨릭
-    ## ========================================================
-    def mousePressEvent(self, event):
-        if not self.extract_mode:
-            return
-
-        self.drag_start = event.pos()
-        self.drag_end = event.pos()
-
-        # QLabel → 프레임 좌표 변환
-        h, w, _ = self.current_frame.shape
-        lw = self.image.width()
-        lh = self.image.height()
-
-        fx = int(self.drag_start.x() * w / lw)
-        fy = int(self.drag_start.y() * h / lh)
-
-        # x, y 즉시 표시
-        self.edit_x.setText(str(fx))
-        self.edit_y.setText(str(fy))
-
-
-    ## ========================================================
-    ## 마우스 이동
-    ## ========================================================
-    def mouseMoveEvent(self, event):
-        if not self.extract_mode or self.drag_start is None:
-            return
-
-        self.drag_end = event.pos()
-
-        h, w, _ = self.current_frame.shape
-        lw = self.image.width()
-        lh = self.image.height()
-
-        fx1 = int(self.drag_start.x() * w / lw)
-        fy1 = int(self.drag_start.y() * h / lh)
-        fx2 = int(self.drag_end.x()   * w / lw)
-        fy2 = int(self.drag_end.y()   * h / lh)
-
-        roi_w = abs(fx2 - fx1)
-        roi_h = abs(fy2 - fy1)
-
-        # w, h 실시간 업데이트
-        self.edit_w_2.setText(str(roi_w))
-        self.edit_h_2.setText(str(roi_h))
-
-
-    ## ========================================================
-    ## 마우스 버튼 off -> 저장
-    ## ========================================================
-    def mouseReleaseEvent(self, event):
-        if not self.extract_mode or self.current_frame is None:
-            return
-
-        self.drag_end = event.pos()
-        self.extract_mode = False
-
-        self.save_roi()
-
-
-    ## ========================================================
-    ## ROI 영역 저장
-    ## ========================================================
+    ## ============================================
+    ## 이미지 저장
+    ## ============================================
     def save_roi(self):
         if self.current_frame is None or self.drag_start is None or self.drag_end is None:
             QMessageBox.warning(self, "오류", "프레임 또는 좌표가 없습니다.")
@@ -235,79 +173,52 @@ class MyWork(QWidget, form_class):  ## QMainWindow(메인창) / form_class(.ui�
         if not self.save_dir:
             QMessageBox.warning(self, "경로 없음", "저장 폴더를 먼저 선택하세요.")
             return
-    
-        x1 = min(self.drag_start.x(), self.drag_end.x())
-        y1 = min(self.drag_start.y(), self.drag_end.y())
-        x2 = max(self.drag_start.x(), self.drag_end.x())
-        y2 = max(self.drag_start.y(), self.drag_end.y())
 
-        h, w, _ = self.current_frame.shape
-        lw = self.image.width()
-        lh = self.image.height()
+        self.crop_roi = logic_file.calc_roi(
+            self.drag_start,
+            self.drag_end,
+            self.current_frame.shape,
+            (self.image.width(), self.image.height())
+        )
 
-        fx1 = max(0, min(w-1, int(x1 * w / lw)))
-        fy1 = max(0, min(h-1, int(y1 * h / lh)))
-        fx2 = max(0, min(w,   int(x2 * w / lw)))
-        fy2 = max(0, min(h,   int(y2 * h / lh)))
-
-        self.crop_roi = (fx1, fy1, fx2, fy2)
-
-        # -------------------------------
-        # 시간 (초)
-        # -------------------------------
-        try:
-            total_time_sec = float(self.edit_t.text())
-        except ValueError:
-            QMessageBox.warning(self, "입력 오류", "시간(초)은 숫자로 입력하세요.")
+        fx1, fy1, fx2, fy2 = self.crop_roi
+        if fx2 - fx1 <= 0 or fy2 - fy1 <= 0:
+            QMessageBox.warning(self, "ROI 오류", "선택한 영역이 너무 작습니다.")
             return
 
-        if total_time_sec <= 0:
-            QMessageBox.warning(self, "입력 오류", "시간은 0보다 커야 합니다.")
-            return
-
-
-        # -------------------------------
-        # 저장할 이미지 개수
-        # -------------------------------
+        # 입력값 체크
         try:
             self.crop_remain_frames = int(self.edit_rgb.text())
         except ValueError:
-            QMessageBox.warning(self, "입력 오류", "저장 개수는 숫자로 입력하세요.")
+            QMessageBox.warning(self, "입력 오류", "rgb는 숫자로 입력하세요.")
+            return
+
+        try:
+            crop_time = float(self.edit_t.text())
+        except ValueError:
+            QMessageBox.warning(self, "입력 오류", "t(s)를 숫자로 입력하세요.")
             return
 
         if self.crop_remain_frames <= 0:
-            QMessageBox.warning(self, "입력 오류", "저장 개수는 1 이상이어야 합니다.")
+            QMessageBox.warning(self, "입력 오류", "rgb는 1 이상이어야 합니다.")
             return
         
+        if crop_time <= 0:
+            QMessageBox.warning(self, "입력 오류", "t(s)는 0보다 커야 합니다.")
+            return
 
-        # -------------------------------
-        # 타이머 간격 계산 (ms)
-        # -------------------------------
-        interval_ms = int(total_time_sec * 1000 / self.crop_remain_frames)
+        interval = max(1, int(crop_time * 1000 / self.crop_remain_frames))
 
-        
-        # -------------------------------
-        # 상태 초기화
-        # -------------------------------
         self.total_save_count = self.crop_remain_frames
         self.roi_index = 0
         self.label_7.setText(f"0 / {self.total_save_count}")
 
-        print(
-            f"자동 저장 시작: {total_time_sec}s 동안 "
-            f"{self.total_save_count}장 저장 "
-            f"(간격 {interval_ms}ms)"
-        )
-
-        # -------------------------------
-        # 타이머 시작
-        # -------------------------------
-        self.crop_timer.start(interval_ms)
+        self.crop_timer.start(interval)
 
 
-    ## ========================================================
-    ## ROI 영역 자동 저장
-    ## ========================================================
+    ## ============================================
+    ## 이미지 추출 버튼
+    ## ============================================
     def auto_crop(self):
         if self.crop_remain_frames <= 0:
             self.crop_timer.stop()
@@ -317,73 +228,58 @@ class MyWork(QWidget, form_class):  ## QMainWindow(메인창) / form_class(.ui�
         if self.current_frame is None or self.crop_roi is None:
             return
 
-        fx1, fy1, fx2, fy2 = self.crop_roi
-        roi = self.current_frame[fy1:fy2, fx1:fx2]
+        roi_img = logic_file.crop_frame(self.current_frame, self.crop_roi)
 
         self.roi_index += 1
-
-        save_dir = self.save_dir or os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            "output"
-        )
-        os.makedirs(save_dir, exist_ok=True)
-
-        filename = os.path.join(
-            save_dir,
-            f"{self.video_base_name}_{self.roi_index:03d}.bmp"
+        ok, filename = logic_file.save_roi_image(
+            roi_img,
+            self.save_dir,
+            self.video_base_name,
+            self.roi_index
         )
 
-        ok = cv2.imwrite(filename, cv2.cvtColor(roi, cv2.COLOR_RGB2BGR))
         self.label_7.setText(
-        f"{self.total_save_count - self.crop_remain_frames + 1} / {self.total_save_count}"
+            f"{self.total_save_count - self.crop_remain_frames + 1} / {self.total_save_count}"
         )
 
         print("저장:", ok, filename)
-
         self.crop_remain_frames -= 1
 
 
-    ## ========================================================
-    ## 
-    ## ========================================================
-    def update_xy(self):
-        h, w, _ = self.current_frame.shape
-        lw = self.image.width()
-        lh = self.image.height()
-
-        fx = int(self.drag_start.x() * w / lw)
-        fy = int(self.drag_start.y() * h / lh)
-
-        self.edit_x.setText(str(fx))
-        self.edit_y.setText(str(fy))
-
-
-    def update_wh(self):
-        h, w, _ = self.current_frame.shape
-        lw = self.image.width()
-        lh = self.image.height()
-
-        fx1 = int(self.drag_start.x() * w / lw)
-        fy1 = int(self.drag_start.y() * h / lh)
-        fx2 = int(self.drag_end.x()   * w / lw)
-        fy2 = int(self.drag_end.y()   * h / lh)
-
-        self.edit_w_2.setText(str(abs(fx2 - fx1)))
-        self.edit_h_2.setText(str(abs(fy2 - fy1)))
-
-
-
+    ## ============================================
+    ## 이미지 추출 버튼
+    ## ============================================
     def eventFilter(self, obj, event):
         if obj is self.image and self.extract_mode:
             if event.type() == QEvent.MouseButtonPress:
                 self.drag_start = event.pos()
                 self.drag_end = event.pos()
-                self.update_xy()
                 return True
 
             elif event.type() == QEvent.MouseMove and self.drag_start:
                 self.drag_end = event.pos()
-                self.update_wh()
+
+                if self.current_frame is not None:
+                    roi = logic_file.calc_roi(
+                        self.drag_start,
+                        self.drag_end,
+                        self.current_frame.shape,
+                        (self.image.width(), self.image.height())
+                    )
+
+                    fx1, fy1, fx2, fy2 = roi
+                    w = fx2 - fx1
+                    h = fy2 - fy1
+
+                    roi_w = abs(fx2 - fx1)
+                    roi_h = abs(fy2 - fy1)
+
+                    # 실시간 UI 출력
+                    self.edit_x.setText(str(fx1))
+                    self.edit_y.setText(str(fy1))
+                    self.edit_w_2.setText(str(roi_w))
+                    self.edit_h_2.setText(str(roi_h))
+
                 return True
 
             elif event.type() == QEvent.MouseButtonRelease:
@@ -396,11 +292,8 @@ class MyWork(QWidget, form_class):  ## QMainWindow(메인창) / form_class(.ui�
 
 
 
-## ========================================================
-# 실행
-## ========================================================
 if __name__ == "__main__":
-    app = QApplication(sys.argv) 
-    window = MyWork() 
-    window.show() 
+    app = QApplication(sys.argv)
+    win = Program()
+    win.show()
     sys.exit(app.exec_())
