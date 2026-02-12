@@ -54,7 +54,7 @@ html, body { height: 100%; margin: 0; background: #ebecef; color: #0f172a; }
   box-sizing: border-box;
 }
 
-/* Reusable surfaces */
+/* Reusable surfaces, class panel에 쓰임 */
 .panel {
   background: white;
   border-radius: 16px;
@@ -158,4 +158,19 @@ html, body { height: 100%; margin: 0; background: #ebecef; color: #0f172a; }
 /* Optional: only content that should avoid chat can add this class */
 .chat-safe {
   padding-right: 70px;
+}
+
+/* 지표 디자인을 위한 css */
+.metrics1 {
+  background: white;
+  border-radius: 16px;
+  padding: 18px;
+  box-shadow: 0 10px 25px rgba(0,0,0,0.08);
+}
+
+.metrics2 {
+  background: white;
+  border-radius: 16px;
+  padding: 18px;
+  box-shadow: 0 10px 25px rgba(0,0,0,0.08);
 }
