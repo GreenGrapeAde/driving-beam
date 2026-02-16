@@ -38,9 +38,9 @@ LIVE_INFER_STRIDE = 1
 # =========================
 # AI 모델 로딩 (pkl)
 # =========================
-with open("examplemodel.pkl", "rb") as f:
-    model = pickle.load(f)
-print("AI model loaded from examplemodel.pkl")
+# with open("examplemodel.pkl", "rb") as f:
+#     model = pickle.load(f)
+# print("AI model loaded from examplemodel.pkl")
 
 def run_ai_inference(frame_bgr):
     """
@@ -244,3 +244,64 @@ async def stream_live(ws: WebSocket):
         except: pass
     finally:
         await ws.close()
+
+
+# =========================
+# Manual - ROI 추출 요청 API
+# =========================
+@app.post("/manual/extract")
+async def manual_extract(payload: dict):
+    video_path = payload.get("videoPath")
+    roi = payload.get("roi")
+    t_sec = payload.get("t")
+    rgb = payload.get("rgb")
+    save_dir = payload.get("saveDir")
+
+    if not video_path or not roi:
+        return {"ok": False, "error": "missing parameters"}
+
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        return {"ok": False, "error": "cannot open video"}
+
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30
+    total_frames = int(t_sec * fps)
+
+    previews = []
+    count = 0
+
+    x = roi["x"]
+    y = roi["y"]
+    w = roi["w"]
+    h = roi["h"]
+
+    while count < total_frames:
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        crop = frame[y:y+h, x:x+w]
+        ok, buffer = cv2.imencode(".jpg", crop)
+
+        if ok:
+            b64 = base64.b64encode(buffer).decode()
+            previews.append(b64)
+
+        count += 1
+
+    cap.release()
+
+    return {
+        "ok": True,
+        "total": len(previews),
+        "items": previews[:1],  # 첫 장만
+        "roiFrame": roi
+    }
+
+# =========================
+# Manual - preview 가져오기 (일단 첫장만)
+# =========================
+@app.get("/manual/preview")
+async def manual_preview(index: int):
+    # 실제 구현에서는 메모리 캐시에서 반환
+    return {"ok": True, "previewBase64": "..."}
