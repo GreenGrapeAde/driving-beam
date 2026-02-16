@@ -77,7 +77,7 @@
       </div>
 
       <span v-if="videoSrc">{{ isPlaying ? "Playing" : "Paused" }}</span>
-      <span v-else>Overlay: ROI -> canvas draw (TODO)</span>
+      <span v-else>Overlay: ROI -> canvas draw</span>
     </div>
   </div>
 </template>
@@ -96,6 +96,10 @@ const props = defineProps({
   enableRoi: { type: Boolean, default: false },
 });
 
+defineExpose({
+  clearSelection
+});
+
 const emit = defineEmits([
   "play",
   "pause",
@@ -109,14 +113,20 @@ const emit = defineEmits([
 const overlay = ref(null);
 const wrapEl = ref(null);
 const videoEl = ref(null);
+
 const isPlaying = ref(false);
 const duration = ref(0);
 const currentTime = ref(0);
 const progress = ref(0);
 
+// ROI state
 const isDragging = ref(false);
 const dragStart = ref(null);
 const dragEnd = ref(null);
+const selectedRoi = ref(null); // 누락 버그 해결
+
+const lastDown = ref(null);
+const CLICK_EPS = 3; // px
 
 watch(
   () => props.videoSrc,
@@ -124,11 +134,13 @@ watch(
     if (!src || !videoEl.value) return;
     videoEl.value.load();
     videoEl.value.volume = props.volume ?? 0.5;
+
     duration.value = 0;
     currentTime.value = 0;
     progress.value = 0;
     isPlaying.value = false;
-    clearOverlay();
+
+    clearSelection(true); // video 바뀌면 ROI도 초기화
     requestAnimationFrame(syncCanvasSize);
   }
 );
@@ -222,23 +234,28 @@ function syncCanvasSize() {
   const c = overlay.value;
   const wrap = wrapEl.value || c?.parentElement;
   if (!c || !wrap) return;
+
   const rect = wrap.getBoundingClientRect();
   const w = Math.max(1, Math.floor(rect.width));
   const h = Math.max(1, Math.floor(rect.height));
+
   if (c.width !== w || c.height !== h) {
     c.width = w;
     c.height = h;
     emit("display-change", { width: w, height: h });
   }
-
-
   drawRoi();
 }
 
 function onMouseDown(e) {
   if (!props.enableRoi) return;
+
+  lastDown.value = getLocalPoint(e);
+
+  // ROI가 이미 선택돼있고 "클릭"이면 해제하고 싶으니
+  // 일단 드래그 후보로 시작
   isDragging.value = true;
-  dragStart.value = getLocalPoint(e);
+  dragStart.value = lastDown.value;
   dragEnd.value = dragStart.value;
   drawRoi();
 }
@@ -247,25 +264,47 @@ function onMouseMove(e) {
   if (!props.enableRoi || !isDragging.value) return;
   dragEnd.value = getLocalPoint(e);
   drawRoi();
+
+  // 드래그 중 실시간 좌표 emit
+  const roi = getRoiRect();
+  if (roi) {
+    const { w, h } = getDisplaySize();
+    emit("roi-change", { ...roi, displayW: w, displayH: h, live: true });
+  }
 }
 
-function onMouseUp() {
+function onMouseUp(e) {
   if (!props.enableRoi || !isDragging.value) return;
   isDragging.value = false;
 
-  const roi = getRoiRect();
+  const up = e ? getLocalPoint(e) : dragEnd.value || lastDown.value;
+  const dx = Math.abs((up?.x ?? 0) - (lastDown.value?.x ?? 0));
+  const dy = Math.abs((up?.y ?? 0) - (lastDown.value?.y ?? 0));
 
-  // ------------------------------------------------
-  const c = overlay.value;
-
-  console.log("UP roi =", roi);
-  console.log("canvas wh =", c?.width, c?.height);
-  // ------------------------------------------------
-
-  if (roi && roi.w > 0 && roi.h > 0) {
-    const { w, h } = getDisplaySize();
-    emit("roi-change", { ...roi, displayW: w, displayH: h });
+  // 거의 안 움직였고, 기존 ROI가 있으면 "클릭"으로 보고 해제
+  if (dx <= CLICK_EPS && dy <= CLICK_EPS && selectedRoi.value) {
+    clearSelection();
+    return;
   }
+
+  const roi = getRoiRect();
+  if (!roi || roi.w < 2 || roi.h < 2) {
+    // 너무 작으면 선택 해제(있었으면)
+    if (selectedRoi.value) {
+      clearSelection();
+    } else {
+      // 아무것도 없으면 그냥 드래그 상태만 초기화
+      dragStart.value = null;
+      dragEnd.value = null;
+      clearOverlay();
+    }
+    return;
+  }
+
+  // 선택 확정
+  selectedRoi.value = roi;
+  const { w, h } = getDisplaySize();
+  emit("roi-change", { ...roi, displayW: w, displayH: h, live: false });
 }
 
 function getLocalPoint(e) {
@@ -286,6 +325,18 @@ function getRoiRect() {
   return { x: x1, y: y1, w: x2 - x1, h: y2 - y1 };
 }
 
+function clearSelection(silent = false) {
+  dragStart.value = null;
+  dragEnd.value = null;
+  selectedRoi.value = null;
+  clearOverlay();
+
+  if (!silent) {
+    const { w, h } = getDisplaySize();
+    emit("roi-change", { x: 0, y: 0, w: 0, h: 0, displayW: w, displayH: h, cleared: true });
+  }
+}
+
 function clearOverlay() {
   const c = overlay.value;
   if (!c) return;
@@ -295,16 +346,14 @@ function clearOverlay() {
 
 function drawRoi() {
   const c = overlay.value;
-
   if (!c) return;
-
-  // drawRoi는 호출되고 있음
-  // console.log("drawRoi called");
 
   const ctx = c.getContext("2d");
   ctx.clearRect(0, 0, c.width, c.height);
+
   const roi = getRoiRect();
   if (!roi) return;
+
   ctx.strokeStyle = "rgba(0, 255, 0, 0.9)";
   ctx.lineWidth = 2;
   ctx.strokeRect(roi.x, roi.y, roi.w, roi.h);
@@ -313,15 +362,6 @@ function drawRoi() {
 let ro = null;
 
 onMounted(() => {
-  // [debugging]----------------------------------------------
-  const c = overlay.value;
-  if (c) {
-    c.addEventListener("mousedown", () => {
-      console.log("canvas mousedown detected");
-    });
-  }
-  console.log("props.enableRoi =", props.enableRoi);
-  // ---------------------------------------------------------
   syncCanvasSize();
   window.addEventListener("resize", syncCanvasSize);
   if (wrapEl.value) {
@@ -400,4 +440,3 @@ onUnmounted(() => {
   padding: 0;
 }
 </style>
-

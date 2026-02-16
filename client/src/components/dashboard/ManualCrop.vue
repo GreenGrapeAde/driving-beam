@@ -16,7 +16,7 @@
       </div>
 
       <ManualVideoWithOverlay
-        :mode="'manual'"
+        ref="videoOverlay"
         :slotName="'M'"
         :video-src="store.videoSrc"
         :play-token="store.playToken"
@@ -24,7 +24,7 @@
         :volume="store.volume"
         :seek-token="store.seekToken"
         :seek-fraction="store.seekFraction"
-        :enable-roi="true"
+        :enable-roi="!!store.videoSrc"
         @play="onPlay"
         @pause="onPause"
         @volume-change="onVolume"
@@ -40,26 +40,36 @@
       <div class="panel">
         <div class="flex items-center justify-between mb-3">
           <div class="text-base font-semibold">Preview</div>
-          <div class="text-xs text-slate-500" v-if="store.total">
-            {{ store.currentIndex }} / {{ store.total }}
+          <div class="text-xs text-slate-500" v-if="store.previewTotal">
+            {{ store.previewIndex }} / {{ store.previewTotal }}
           </div>
         </div>
 
-        <div v-if="store.status !== 'idle'" class="preview-wrap">
+        <div v-if="store.previewIndex" class="preview-wrap">
           <img v-if="currentPreview" :src="`data:image/png;base64,${currentPreview}`" class="preview-img" />
           <div v-else class="preview-empty">No preview loaded.</div>
         </div>
         <div v-else class="preview-empty">No preview yet.</div>
 
-        <div v-if="store.status !== 'idle'" class="preview-nav">
-          <button class="ui-btn-secondary" type="button" :disabled="store.currentIndex <= 1">&lt;</button>
-          <div class="text-xs">
-            <input class="page-input" type="number" :min="1" :max="store.total" v-model.number="pageInput" />
-            / {{ store.total }}
+        <div v-if="store.previewTotal" class="preview-nav flex items-center justify-between">
+          
+          <!-- 왼쪽 그룹 -->
+          <div class="flex items-center gap-2 mx-auto">
+            <button class="ui-btn-secondary" type="button" @click="prevPage" :disabled="store.previewIndex <= 1">&lt;</button>
+            <div class="text-xs">
+              <input class="page-input" type="number" :min="1" :max="store.previewTotal" v-model.number="pageInput" @keyup.enter="goPage" />
+              / {{ store.previewTotal }}
+            </div>
+            <button class="ui-btn-secondary" type="button" @click="nextPage" :disabled="store.previewIndex >= store.previewTotal">&gt;</button>
           </div>
-          <button class="ui-btn-secondary" type="button" :disabled="store.currentIndex >= store.total">&gt;</button>
-          <button class="ui-btn-secondary" type="button">Go</button>
+
+          <!-- 오른쪽 -->
+          <button class="ui-btn" type="button" @click="onSave">
+            Save All Frames
+          </button>
+
         </div>
+
       </div>
 
       <!-- Controls -->
@@ -67,34 +77,56 @@
         <div class="text-base font-semibold mb-3">Controls</div>
 
         <div class="grid grid-cols-2 gap-3 text-sm">
-          <div class="field"><div class="label">x</div><div class="value">{{ roiFrame.x ?? "-" }}</div></div>
-          <div class="field"><div class="label">y</div><div class="value">{{ roiFrame.y ?? "-" }}</div></div>
-          <div class="field"><div class="label">w</div><div class="value">{{ roiFrame.w ?? "-" }}</div></div>
-          <div class="field"><div class="label">h</div><div class="value">{{ roiFrame.h ?? "-" }}</div></div>
+          <div class="field">
+            <div class="label">x</div>
+            <input class="input" type="text" :value="roiDisplay.x ?? '-'" readonly />
+          </div>
+          <div class="field">
+            <div class="label">y</div>
+            <input class="input" type="text" :value="roiDisplay.y ?? '-'" readonly />
+          </div>
+          <div class="field">
+            <div class="label">w</div>
+            <input class="input" type="text" :value="roiDisplay.w ?? '-'" readonly />
+          </div>
+          <div class="field">
+            <div class="label">h</div>
+            <input class="input" type="text" :value="roiDisplay.h ?? '-'" readonly />
+          </div>
         </div>
 
         <div class="mt-4 grid grid-cols-2 gap-3">
           <label class="input-row">
             <span>t(s)</span>
-            <input class="input" type="number" min="0.1" step="0.1" v-model.number="store.tSec" />
+            <input class="input" type="number" min="0.1" step="0.1" v-model="store.tSec" />
           </label>
           <label class="input-row">
             <span>rgb</span>
-            <input class="input" type="number" min="1" step="1" v-model.number="store.rgbCount" />
+            <select class="input" v-model.number="store.rgbCount">
+              <option :value="24">24 (default)</option>
+            </select>
           </label>
         </div>
 
-        <div class="mt-4 grid grid-cols-1 gap-2">
+        <div class="mt-4 grid grid-cols-2 gap-3">
           <label class="input-row">
             <span>Save dir</span>
-            <input class="input" type="text" v-model="store.saveDir" placeholder="C:\\path\\to\\output" />
+          </label>
+          <label class="input-row">
+            <span class="text-s text-blue-600" v-if="store.saveDir">
+              ✓ Ok!
+            </span>
+            <span class="text-s" v-else>
+              -
+            </span>
+            <button class="ui-btn-secondary" type="button" @click="pickSaveDir">Select</button>
           </label>
         </div>
 
         <div class="mt-4 flex items-center gap-2">
-          <button class="ui-btn" type="button" v-if="store.status === 'idle'" @click="onExtract">Extract</button>
-          <button class="ui-btn" type="button" v-if="store.status === 'extracted'">Save</button>
-          <button class="ui-btn-secondary" type="button" @click="store.resetAll()">Reset</button>
+          <button class="ui-btn" type="button" @click="onExtract">Extract</button>
+          <button class="ui-btn-secondary" type="button" @click="onReset">Reset</button>
+          <span v-if="errorMsg" class="text-xs text-rose-600">{{ errorMsg }}</span>
         </div>
       </div>
     </div>
@@ -109,21 +141,38 @@ import UploadOnceBar from "@/components/dashboard/UploadOnceBar.vue";
 
 const store = useManualCropStore();
 const pageInput = ref(1);
+const errorMsg = ref("");
+const videoOverlay = ref(null);
 
-const roiFrame = computed(() => store.roiFrame || {});
+const roiDisplay = computed(() => {
+  const src = store.roiFrame || store.roi || { x: 0, y: 0, w: 0, h: 0 };
+  return {
+    x: Math.round(src.x || 0),
+    y: Math.round(src.y || 0),
+    w: Math.round(src.w || 0),
+    h: Math.round(src.h || 0),
+  };
+});
 const currentPreview = computed(() => {
-  if (!store.currentIndex) return "";
-  return store.previews[store.currentIndex - 1] || "";
+  if (!store.previewIndex) return "";
+  return store.previews[store.previewIndex] || "";
 });
 
-function onUploaded(payload) {
-  store.videoSrc = payload.src;
-  store.resetAll();
+async function onUploaded(payload) {
+  errorMsg.value = "";
+  store.setVideoLocal(payload.src);
+  store.resetInputs();
+  try {
+    await store.uploadVideo(payload.file);
+  } catch (e) {
+    errorMsg.value = e.message || "upload failed";
+  }
 }
 
 function onCleared() {
-  store.videoSrc = "";
-  store.resetAll();
+  store.setVideoLocal("");
+  store.videoPath = "";
+  store.resetInputs();
 }
 
 function onPlay() { store.playToken += 1; }
@@ -132,9 +181,7 @@ function onVolume(val) { store.volume = val; }
 function onSeek(frac) { store.seekFraction = frac; store.seekToken += 1; }
 
 function onRoi(payload) {
-  store.roi = { x: payload.x, y: payload.y, w: payload.w, h: payload.h };
-  store.displayW = payload.displayW || 0;
-  store.displayH = payload.displayH || 0;
+  store.setRoiLive(payload);
 }
 
 function onTime(payload) { store.currentTimeSec = payload.currentTime || 0; }
@@ -143,36 +190,69 @@ function onDisplay(payload) {
   store.displayH = payload.height || 0;
 }
 
-async function onExtract() {
-
-  if (!store.roi || !store.saveDir || !store.tSec || !store.rgbCount) {
-    alert("모든 값을 입력하세요");
-    return;
+async function pickSaveDir() {
+  errorMsg.value = "";
+  if (window.showDirectoryPicker) {
+    try {
+      const dir = await window.showDirectoryPicker();
+      store.saveDir = dir.name;
+    } catch (e) {
+      // user canceled
+    }
+  } else {
+    const val = window.prompt("Save dir path");
+    if (val) store.saveDir = val;
   }
+}
 
-  const res = await fetch("http://localhost:8000/manual/extract", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      videoPath: store.videoSrc,
-      roi: store.roi,
-      t: store.tSec,
-      rgb: store.rgbCount,
-      saveDir: store.saveDir
-    })
-  });
+async function onExtract() {
+  errorMsg.value = "";
+  try {
+    await store.extract();
+    pageInput.value = store.previewIndex || 1;
+  } catch (e) {
+    errorMsg.value = e.message || "extract failed";
+  }
+}
 
-  const data = await res.json();
+function onReset() {
+  errorMsg.value = "";
+  store.resetInputs();
+  videoOverlay.value?.clearSelection(); // ROI 해제
+}
 
-  if (data.ok) {
-    store.previews = data.items;
-    store.total = data.total;
-    store.status = "extracted";
-    store.roiFrame = data.roiFrame;
+async function prevPage() {
+  const next = Math.max(1, store.previewIndex - 1);
+  await store.fetchPreview(next);
+  pageInput.value = next;
+}
+
+async function nextPage() {
+  const next = Math.min(store.previewTotal, store.previewIndex + 1);
+  await store.fetchPreview(next);
+  pageInput.value = next;
+}
+
+async function goPage() {
+  let target = Number(pageInput.value) || 1;
+  if (target < 1) target = 1;
+  if (target > store.previewTotal) target = store.previewTotal;
+  await store.fetchPreview(target);
+  pageInput.value = target;
+}
+
+async function onSave() {
+  errorMsg.value = "";
+  try {
+    const result = await store.save(); // { ok, savedCount, dir }
+    errorMsg.value = `Saved ${result.savedCount} BMP files to: ${result.dir}`;
+  } catch (e) {
+    errorMsg.value = e.message || "save failed";
   }
 }
 
 
+console.log("typeof save:", typeof store.save, "typeof saveAll:", typeof store.saveAll);
 </script>
 
 <style scoped>
@@ -242,7 +322,7 @@ async function onExtract() {
 }
 
 .page-input {
-  width: 60px;
+  width: 46px;
   padding: 4px 6px;
   border-radius: 6px;
   border: 1px solid rgba(15, 23, 42, 0.12);
