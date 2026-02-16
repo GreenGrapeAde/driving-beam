@@ -15,12 +15,13 @@
       Playback
     </button>
 
-    <!-- <div class="mt-4 text-xs text-slate-200/80 leading-relaxed">
-      <div class="font-semibold text-slate-100 mb-1">ADB Test Dashboard</div>
-      <div>• A/B 모델 비교</div>
-      <div>• Beam Visualization</div>
-      <div>• Metrics 로그</div>
-    </div> -->
+    <button
+      class="btn"
+      :class="{ 'is-active': mode === 'manual' }"
+      @click="$emit('update:mode', 'manual')"
+    >
+      Manual
+    </button>
   </aside>
 </template>
 

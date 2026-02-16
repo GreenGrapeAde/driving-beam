@@ -1,7 +1,7 @@
 ﻿<template>
   <div class="card h-full flex flex-col">
     <div class="flex items-center justify-between mb-2">
-      <div class="text-sm font-semibold">Video + Detection Overlay</div>
+      <div class="text-sm font-semibold">{{ mode === 'live' ? 'Live Stream + Overlay' : mode === 'playback' ? 'Playback + Overlay' : 'Manual Crop Preview' }}</div>
       <div class="text-xs text-slate-500">Slot {{ slotName }}</div>
     </div>
 
@@ -28,7 +28,7 @@
     </div>
     <!-- playback 모드일 때만 동영상 기능 보이기 -->
     <div 
-      v-if="mode === 'playback'"
+      v-if="mode === 'playback' || mode === 'manual'"
     >
       <div class="mt-3 flex items-center flex-wrap gap-3 text-xs text-slate-600">
         <div class="flex items-center gap-2">
@@ -262,3 +262,7 @@ onMounted(() => {
   padding: 0;
 }
 </style>
+
+
+
+

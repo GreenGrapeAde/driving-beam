@@ -4,7 +4,8 @@
 
     <main class="content">
       <DashboardHeader :mode="mode" />
-      <ModelCompareGrid :mode="mode" />
+      <ModelCompareGrid v-if="mode !== 'manual'" :mode="mode" />
+      <ManualCrop v-else />
     </main>
 
     <!-- Chat widget layout with toggle -->
@@ -36,8 +37,9 @@ import { ref } from "vue";
 import Sidebar from "./components/layout/Sidebar.vue";
 import DashboardHeader from "./components/layout/DashboardHeader.vue";
 import ModelCompareGrid from "./components/dashboard/ModelCompareGrid.vue";
+import ManualCrop from "./components/dashboard/ManualCrop.vue";
 
-const mode = ref("live"); // 'live' | 'playback'
+const mode = ref("live"); // 'live' | 'playback' | 'manual'
 const chatOpen = ref(false);
 
 function toggleChat() {
