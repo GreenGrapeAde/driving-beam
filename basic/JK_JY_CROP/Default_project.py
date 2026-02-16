@@ -174,6 +174,7 @@ class Program(base_class, form_class):
             QMessageBox.warning(self, "경로 없음", "저장 폴더를 먼저 선택하세요.")
             return
 
+        # ROI 계산
         self.crop_roi = logic_file.calc_roi(
             self.drag_start,
             self.drag_end,
@@ -186,34 +187,48 @@ class Program(base_class, form_class):
             QMessageBox.warning(self, "ROI 오류", "선택한 영역이 너무 작습니다.")
             return
 
-        # 입력값 체크
-        try:
-            self.crop_remain_frames = int(self.edit_rgb.text())
-        except ValueError:
-            QMessageBox.warning(self, "입력 오류", "rgb는 숫자로 입력하세요.")
-            return
-
+        # 입력값: t(s)
         try:
             crop_time = float(self.edit_t.text())
         except ValueError:
             QMessageBox.warning(self, "입력 오류", "t(s)를 숫자로 입력하세요.")
             return
 
-        if self.crop_remain_frames <= 0:
-            QMessageBox.warning(self, "입력 오류", "rgb는 1 이상이어야 합니다.")
-            return
-        
         if crop_time <= 0:
             QMessageBox.warning(self, "입력 오류", "t(s)는 0보다 커야 합니다.")
             return
 
-        interval = max(1, int(crop_time * 1000 / self.crop_remain_frames))
+        # 입력값: rgb (비트수 @1px) — 과제 요구사항 맞추기용
+        # 보통 24가 정답. 8/24/32만 허용(원하면 24만 허용해도 됨)
+        try:
+            rgb_bpp = int(self.edit_rgb.text())
+        except ValueError:
+            QMessageBox.warning(self, "입력 오류", "rgb(비트수)는 숫자로 입력하세요. 예: 24")
+            return
 
-        self.total_save_count = self.crop_remain_frames
+        if rgb_bpp not in (8, 24, 32):
+            QMessageBox.warning(self, "입력 오류", "rgb는 8/24/32 중 하나로 입력하세요. (일반적으로 24)")
+            return
+
+        fps_fixed = 30
+        interval = int(1000 / fps_fixed)  # 33ms
+
+        total_frames = int(round(crop_time * fps_fixed))
+        if total_frames <= 0:
+            QMessageBox.warning(self, "입력 오류", "t(s)가 너무 작아서 저장할 프레임이 없습니다.")
+            return
+
+        # 상태 초기화
+        self.total_save_count = total_frames
+        self.crop_remain_frames = total_frames
         self.roi_index = 0
+
+        # 진행 표시
         self.label_7.setText(f"0 / {self.total_save_count}")
 
+        # 타이머 시작
         self.crop_timer.start(interval)
+
 
 
     ## ============================================
@@ -234,7 +249,7 @@ class Program(base_class, form_class):
         ok, filename = logic_file.save_roi_image(
             roi_img,
             self.save_dir,
-            self.video_base_name,
+            #self.video_base_name,
             self.roi_index
         )
 

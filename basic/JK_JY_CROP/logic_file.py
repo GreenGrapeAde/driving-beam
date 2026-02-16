@@ -96,9 +96,19 @@ def crop_frame(frame, roi):
 ## ================================================================
 ## 크롭 이미지 저장
 ## ================================================================
-def save_roi_image(roi_img, save_dir, base_name, index):
-    os.makedirs(save_dir, exist_ok=True)
-    filename = os.path.join(save_dir, f"{base_name}_{index:03d}.bmp")
+# def save_roi_image(roi_img, save_dir, base_name, index):
+#     os.makedirs(save_dir, exist_ok=True)
+#     filename = os.path.join(save_dir, f"{base_name}_{index:03d}.bmp")
 
-    ok = cv2.imwrite(filename, cv2.cvtColor(roi_img, cv2.COLOR_RGB2BGR))
-    return ok, filename
+#     ok = cv2.imwrite(filename, cv2.cvtColor(roi_img, cv2.COLOR_RGB2BGR))
+#     return ok, filename
+
+def save_roi_image(img, save_dir, idx):
+    os.makedirs(save_dir, exist_ok=True)
+    filename = f"roi_{idx:04d}.bmp"
+    path = os.path.normpath(os.path.join(save_dir, filename))
+
+    # RGB -> BGR 변환 후 저장 (current_frame이 RGB이므로)
+    bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+    ok = cv2.imwrite(path, bgr)
+    return ok, path
