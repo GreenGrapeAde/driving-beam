@@ -3,7 +3,7 @@
     <div class="flex items-start justify-between gap-4">
       <div>
         <h1 class="text-2xl font-extrabold tracking-tight">
-          ADB Performance Validation Dashboard
+          Dashboard
         </h1>
         <p class="mt-1 text-sm text-slate-600">
           Compare baseline vs custom detection behavior in real-time / playback.
