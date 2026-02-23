@@ -7,6 +7,7 @@ export const useManualCropStore = defineStore("manualCrop", {
     status: "idle", // idle | extracted
     videoSrc: "",
     videoPath: "",
+    filename: "",
 
     roi: null, // live/display coords
     roiFrame: null, // server frame coords
@@ -40,6 +41,9 @@ export const useManualCropStore = defineStore("manualCrop", {
       const data = await res.json();
       if (!data.path) throw new Error("upload failed");
       this.videoPath = data.path;
+      this.filename = data.filename;
+      
+      return data; 
     },
 
     setRoiLive(payload) {

@@ -1,4 +1,7 @@
-﻿# -*- coding: utf-8 -*-
+﻿# ===========================================================
+# 서버 활성화 명령어: uvicorn 0216_server:app --reload --port 8000
+# 
+# ===========================================================
 import os
 import cv2
 import base64
@@ -8,6 +11,12 @@ import time
 import numpy as np
 from fastapi import FastAPI, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+# ==================================================================
+# 서버에 RT-DETR(ultralytics) Detection MVP 붙이기
+import torch
+from ultralytics import YOLO, RTDETR
+# ==================================================================
+
 
 app = FastAPI()
 
@@ -45,12 +54,118 @@ TARGET_FPS = 30
 UPLOAD_INFER_STRIDE = 10
 LIVE_INFER_STRIDE = 1
 
+
+# [주영 시작] ==================================================================
+# 서버에 RT-DETR(ultralytics) Detection MVP 붙이기
+
+# =========================
+# AI Model (Global 1-time load)
+# =========================
+MODEL_KIND = os.getenv("MODEL_KIND", "RTDETR")  # "YOLO" or "RTDETR"
+MODEL_PATH = os.getenv("MODEL_PATH", "rtdetr-l.pt")  # e.g., "yolov8n.pt", "rtdetr-l.pt"
+MODEL_IMGSZ = int(os.getenv("MODEL_IMGSZ", "1280"))
+MODEL_CONF = float(os.getenv("MODEL_CONF", "0.25"))
+
+# COCO 기준 자동차/오토바이/버스/트럭만
+TARGET_CLASSES = [2, 3, 5, 7]
+
+_device = "cuda:0" if torch.cuda.is_available() else "cpu"
+_model = None
+
+def get_model():
+    global _model
+    if _model is None:
+        if MODEL_KIND.upper() == "RTDETR" or "rtdetr" in MODEL_PATH.lower():
+            _model = RTDETR(MODEL_PATH)
+        else:
+            _model = YOLO(MODEL_PATH)
+
+        # device로 올리기(ultralytics는 내부에서 자동 처리도 하지만 명시해두면 좋음)
+        try:
+            _model.to(_device)
+        except Exception:
+            pass
+    return _model
+# [주영 끝] ==================================================================
+
+
+# [주영 시작] ==================================================================
 # =========================
 # AI inference placeholder
 # =========================
+# def run_ai_inference(frame_bgr):
+#     detections = []
+#     return detections
+
+TRACKER_CFG = os.getenv("TRACKER_CFG", "botsort.yaml")  # or "bytetrack.yaml"
+
 def run_ai_inference(frame_bgr):
-    detections = []
-    return detections
+    model = get_model()
+
+    frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+
+    results = model.track(
+        source=frame_rgb,
+        imgsz=MODEL_IMGSZ,
+        conf=MODEL_CONF,
+        classes=TARGET_CLASSES,
+        tracker=TRACKER_CFG,
+        persist=True,
+        device=_device,
+        verbose=False
+    )
+
+    r0 = results[0]
+    dets = []
+    if r0.boxes is None or len(r0.boxes) == 0:
+        return dets
+
+    names = r0.names
+    h, w = frame_bgr.shape[:2]
+
+    # id는 없을 수도 있음
+    ids = None
+    try:
+        ids = r0.boxes.id
+    except Exception:
+        ids = None
+
+    for i, b in enumerate(r0.boxes):
+        x1, y1, x2, y2 = b.xyxy[0].tolist()
+        conf = float(b.conf[0].item()) if hasattr(b.conf[0], "item") else float(b.conf[0])
+        cls_id = int(b.cls[0].item()) if hasattr(b.cls[0], "item") else int(b.cls[0])
+
+        x1 = max(0, min(w - 1, int(round(x1))))
+        y1 = max(0, min(h - 1, int(round(y1))))
+        x2 = max(0, min(w - 1, int(round(x2))))
+        y2 = max(0, min(h - 1, int(round(y2))))
+
+        try:
+            cls_name = names[cls_id]
+        except Exception:
+            cls_name = str(cls_id)
+
+        det = {"x1": x1, "y1": y1, "x2": x2, "y2": y2, "cls": str(cls_name), "conf": float(conf)}
+
+        if ids is not None:
+            try:
+                det["id"] = int(ids[i].item())
+            except Exception:
+                pass
+
+        dets.append(det)
+
+    return dets
+# [주영 끝] ==================================================================
+
+
+
+
+
+
+
+
+
 
 def draw_detections(frame_bgr, detections):
     out = frame_bgr.copy()
@@ -118,7 +233,64 @@ async def stream_uploaded_video(ws: WebSocket):
         t0 = time.time()
         sent_frames = 0
 
+
+        # ====================================================================
+        # 주영 수정 시작
+        # ====================================================================
+        paused = False          # 일시정지 flag
+        stop_flag = False       # stop flag
+        end_sent = False
+
         while cap.isOpened():
+            # ---- control 메시지 처리(가능하면 여러 개 연속으로 비움) ----
+            # timeout=0.0은 너무 빡세서(거의 매번 timeout) control을 놓치기 쉬움.
+            # 아주 짧게라도 기다려서 들어온 control을 잡는다.
+            while True:
+                try:
+                    msg = await asyncio.wait_for(ws.receive_text(), timeout=0.003)  # 3ms 정도
+                    ctrl = json.loads(msg)
+
+                    if ctrl.get("type") == "control":
+                        action = ctrl.get("action")
+
+                        if action == "pause":
+                            paused = True
+                            await ws.send_text(json.dumps({"type": "state", "state": "PAUSED"}))
+
+                        elif action == "resume":
+                            paused = False
+                            await ws.send_text(json.dumps({"type": "state", "state": "PLAYING"}))
+
+                        elif action == "stop":
+                            stop_flag = True
+                            await ws.send_text(json.dumps({
+                                "type": "end",
+                                "mode": "upload",
+                                "message": "stopped by client"
+                            }))
+                            end_sent = True
+                            break
+
+                    # control 말고 다른 타입이면 무시 (init은 이미 위에서 받았으니까)
+                except asyncio.TimeoutError:
+                    # 지금 당장 더 받을 control 없음 → 프레임 처리로 넘어감
+                    break
+                except WebSocketDisconnect:
+                    stop_flag = True
+                    break
+                except Exception:
+                    # control parsing 실패는 무시(프레임 스트림 안정성 우선)
+                    break
+
+            if stop_flag:
+                break
+
+            if paused:
+                await asyncio.sleep(0.05)
+                continue
+        # ====================================================================
+        # 주영 수정 끝
+        # ====================================================================
             ret, frame = cap.read()
             if not ret:
                 break
@@ -150,9 +322,27 @@ async def stream_uploaded_video(ws: WebSocket):
             await asyncio.sleep(1 / TARGET_FPS)
 
         cap.release()
-        await ws.send_text(json.dumps({"type": "end", "mode": "upload", "message": "video stream ended"}))
-        await ws.close()
+        # ====================================================================
+        # 주영 수정 시작
+        # ====================================================================
+        # stop에서 이미 end를 보낸 경우(end_sent=True) 여기서 또 보내면 터짐
+        if not end_sent:
+            try:
+                await ws.send_text(json.dumps({"type": "end", "mode": "upload", "message": "video stream ended"}))
+            except RuntimeError:
+                pass
+            except Exception:
+                pass
 
+        try:
+            await ws.close()
+        except RuntimeError:
+            pass
+        except Exception:
+            pass
+        # ====================================================================
+        # 주영 수정 끝
+        # ====================================================================
     except WebSocketDisconnect:
         print("Upload WebSocket disconnected")
     except Exception as e:
