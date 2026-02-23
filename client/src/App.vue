@@ -4,7 +4,8 @@
 
     <main class="content">
       <DashboardHeader :mode="mode" />
-      <ModelCompareGrid v-if="mode !== 'manual'" :mode="mode" />
+      <LiveView v-if="mode === 'live'" :mode="mode" />
+      <PlaybackView v-else-if="mode === 'playback'" :mode="mode" />
       <ManualCrop v-else />
     </main>
 
@@ -36,8 +37,9 @@
 import { ref } from "vue";
 import Sidebar from "./components/layout/Sidebar.vue";
 import DashboardHeader from "./components/layout/DashboardHeader.vue";
-import ModelCompareGrid from "./components/dashboard/ModelCompareGrid.vue";
 import ManualCrop from "./components/dashboard/ManualCrop.vue";
+import LiveView from "./components/dashboard/LiveView.vue";
+import PlaybackView from "./components/dashboard/PlaybackView.vue";
 
 const mode = ref("live"); // 'live' | 'playback' | 'manual'
 const chatOpen = ref(false);

@@ -6,7 +6,7 @@
           Dashboard
         </h1>
         <p class="mt-1 text-sm text-slate-600">
-          Compare baseline vs custom detection behavior in real-time / playback.
+          Image Auto/Manual Crop Tool
         </p>
       </div>
 

@@ -136,8 +136,8 @@
 <script setup>
 import { computed, ref } from "vue";
 import { useManualCropStore } from "@/manualCrop";
-import ManualVideoWithOverlay from "@/components/dashboard/ManualVideoWithOverlay.vue";
-import UploadOnceBar from "@/components/dashboard/UploadOnceBar.vue";
+import ManualVideoWithOverlay from "@/components/sub/child/ManualVideoWithOverlay.vue";
+import UploadOnceBar from "@/components/sub/UploadOnceBar.vue";
 
 const store = useManualCropStore();
 const pageInput = ref(1);
