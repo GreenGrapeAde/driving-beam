@@ -1,7 +1,7 @@
 ﻿<template>
   <div class="card h-full flex flex-col">
     <div class="flex items-center justify-between mb-2">
-      <div class="text-sm font-semibold">Manual Crop Preview</div>
+      <div class="text-sm font-semibold">Video</div>
       <div class="text-xs text-slate-500">Slot {{ slotName }}</div>
     </div>
 
