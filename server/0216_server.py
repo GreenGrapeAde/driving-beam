@@ -1,6 +1,5 @@
 ﻿# ===========================================================
 # 서버 활성화 명령어: uvicorn 0216_server:app --reload --port 8000
-# 
 # ===========================================================
 import os
 import cv2
@@ -11,12 +10,10 @@ import time
 import numpy as np
 from fastapi import FastAPI, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-# ==================================================================
+
 # 서버에 RT-DETR(ultralytics) Detection MVP 붙이기
 import torch
 from ultralytics import YOLO, RTDETR
-# ==================================================================
-
 
 app = FastAPI()
 
@@ -47,6 +44,7 @@ LAST_ROI_FRAME = None
 LAST_T_SEC = 0
 LAST_SAVE_DIR = ""
 LAST_START_SEC = 0
+
 # =========================
 # 설정값
 # =========================
