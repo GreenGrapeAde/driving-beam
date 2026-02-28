@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <section class="space-y-4 chat-safe">
     <UploadOnceBar
       :enabled="true"
@@ -14,16 +14,29 @@
           <div class="text-lg font-bold">Local video + server detections</div>
         </div>
         <div class="flex items-center gap-3 text-xs text-slate-500">
-          <div class="flex items-center gap-2">
-            <span>Status:</span>
-            <span class="font-semibold">{{ uiState }}</span>
-            <span v-if="store.isUploading" class="inline-flex items-center gap-2">
-              <span class="spinner"></span>
-              {{ store.uploadProgress }}%
+          <span class="font-semibold">{{ uiState }}</span>
+          <span v-if="store.isUploading" class="inline-flex items-center gap-1">
+            <span class="spinner"></span> 업로드 {{ store.uploadProgress }}%
+          </span>
+          <span v-if="store.isAnalyzing" class="inline-flex items-center gap-1 text-sky-500">
+            <span class="spinner"></span>
+            {{ phaseLabel }} {{ store.analyzeProgress }}%
+            <span v-if="store.analyzeEta > 0 && store.analyzePhase === 'analyzing'">
+              (잔여 {{ store.analyzeEta }}초)
             </span>
-          </div>
+          </span>
           <span v-if="errorMsg" class="text-rose-600">{{ errorMsg }}</span>
         </div>
+      </div>
+
+      <!-- 진행률 바 -->
+      <div v-if="store.isAnalyzing || store.isUploading"
+           class="w-full h-1.5 bg-slate-200 rounded-full mb-3 overflow-hidden">
+        <div
+          class="h-full rounded-full transition-all duration-300"
+          :class="progressBarColor"
+          :style="{ width: progressBarWidth + '%' }"
+        />
       </div>
 
       <div class="card h-full flex flex-col">
@@ -32,7 +45,10 @@
           <div class="text-xs text-slate-500">
             {{ formatTime(currentTime) }} / {{ formatTime(duration) }}
             <span class="ml-2">dets: {{ lastDets.length }}</span>
-            <span class="ml-2">server_fps: {{ metrics.server_fps?.toFixed?.(1) ?? "-" }}</span>
+            <span v-if="store.metaInfo" class="ml-2">
+              {{ store.metaInfo.frame_w }}×{{ store.metaInfo.frame_h }}
+              · stride {{ store.metaInfo.infer_stride }}
+            </span>
           </div>
         </div>
 
@@ -50,51 +66,76 @@
             @play="onPlay"
             @pause="onPause"
           />
-
           <div v-else class="video-placeholder">
             <div class="text-xs text-slate-500 mt-1">No video yet. Upload one.</div>
           </div>
 
           <canvas ref="canvasEl" class="overlay-canvas"></canvas>
+
+          <!-- 분석 중 오버레이 (추론 + 크롭 + ZIP) -->
+          <div v-if="store.isAnalyzing" class="task-overlay">
+            <div class="text-white text-center px-6">
+
+              <!-- 진행률 숫자 -->
+              <div class="text-3xl font-bold mb-2">{{ store.analyzeProgress }}%</div>
+
+              <!-- phase별 메시지 -->
+              <div class="text-sm opacity-90 mb-1">{{ phaseLabel }}</div>
+
+              <!-- 크롭 저장 수 (analyzing 중) -->
+              <div v-if="store.analyzePhase === 'analyzing'" class="text-xs opacity-60">
+                <span v-if="store.analyzeWritten > 0">{{ store.analyzeWritten }}장 저장됨</span>
+                <span v-if="store.analyzeEta > 0" class="ml-2">· 잔여 약 {{ store.analyzeEta }}초</span>
+              </div>
+
+              <!-- ZIP 생성 중 메시지 -->
+              <div v-if="store.analyzePhase === 'zipping'" class="text-xs opacity-60">
+                총 {{ store.analyzeWritten }}장 · ZIP 압축 중...
+              </div>
+
+              <!-- 진행바 -->
+              <div class="mt-4 w-56 h-1.5 bg-white/20 rounded-full overflow-hidden mx-auto">
+                <div
+                  class="h-full rounded-full transition-all duration-300"
+                  :class="overlayBarColor"
+                  :style="{ width: store.analyzeProgress + '%' }"
+                />
+              </div>
+
+              <!-- 취소 버튼 (analyzing 중에만) -->
+              <button
+                v-if="store.analyzePhase === 'analyzing'"
+                class="mt-4 px-4 py-1 text-xs bg-white/20 hover:bg-white/30 rounded"
+                @click="onCancelAnalyze"
+              >취소</button>
+            </div>
+          </div>
         </div>
 
         <div class="mt-3 flex items-center flex-wrap gap-3 text-xs text-slate-600">
           <div class="flex items-center gap-2">
-            <button class="ui-btn-secondary icon-btn" type="button" :disabled="controlsDisabled" @click="emitPlay">
-              <span aria-label="Play">&#9658;</span>
+            <button class="ui-btn-secondary icon-btn" type="button"
+              :disabled="!canPlay" @click="emitPlay">
+              <span>&#9658;</span>
             </button>
-            <button class="ui-btn-secondary icon-btn" type="button" :disabled="controlsDisabled" @click="emitPause">
-              <span aria-label="Pause">&#10074;&#10074;</span>
+            <button class="ui-btn-secondary icon-btn" type="button"
+              :disabled="!canPlay" @click="emitPause">
+              <span>&#10074;&#10074;</span>
             </button>
           </div>
 
           <div class="flex items-center gap-2 min-w-[220px]">
             <span>Seek</span>
-            <input
-              class="progress-slider"
-              type="range"
-              min="0"
-              max="1"
-              step="0.001"
-              :value="progress"
-              @input="onSeekInput"
-              :disabled="controlsDisabled || duration === 0"
-            />
+            <input class="progress-slider" type="range" min="0" max="1" step="0.001"
+              :value="progress" @input="onSeekInput"
+              :disabled="!canPlay || duration === 0" />
             <span class="w-16 text-right">{{ formatTime(currentTime) }}</span>
           </div>
 
           <div class="flex items-center gap-2">
             <span>Volume</span>
-            <input
-              class="volume-slider"
-              type="range"
-              min="0"
-              max="1"
-              step="0.01"
-              :value="volume"
-              @input="onVolumeChange"
-              :disabled="controlsDisabled"
-            />
+            <input class="volume-slider" type="range" min="0" max="1" step="0.01"
+              :value="volume" @input="onVolumeChange" :disabled="!canPlay" />
             <span class="w-8 text-right">{{ Math.round(volume * 100) }}%</span>
           </div>
         </div>
@@ -104,189 +145,136 @@
 </template>
 
 <script setup>
-const WS_BASE = "ws://localhost:8000";
-
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import UploadOnceBar from "../sub/UploadOnceBar.vue";
 import { usePlaybackCropStore } from "@/playbackCrop";
 
 const store = usePlaybackCropStore();
 
-const uiState = ref("NO_VIDEO"); // NO_VIDEO | UPLOADING | READY | AI_ON | ERROR
+const uiState  = ref("NO_VIDEO");
 const errorMsg = ref("");
 
-const ws = ref(null);
-
-// video refs
-const videoEl = ref(null);
+const videoEl  = ref(null);
 const canvasEl = ref(null);
-const wrapEl = ref(null);
+const wrapEl   = ref(null);
 
-const duration = ref(0);
-const currentTime = ref(0);
-const progress = ref(0);
-const volume = ref(0.5);
-const isSeeking = ref(false);
+const duration      = ref(0);
+const currentTime   = ref(0);
+const progress      = ref(0);
+const volume        = ref(0.5);
+const isSeeking     = ref(false);
 const seekHoldUntil = ref(0);
 
-// meta from server
-const meta = ref({ fps_src: 30, frame_w: 0, frame_h: 0, infer_stride: 10 });
-
-// detections buffer: [{t_ms, detections, frame_index}]
-const detBuffer = ref([]);
-const lastDets = ref([]);
-const metrics = ref({});
-
-// render/cache
-const wrapSize = ref({ w: 0, h: 0, dpr: 1 });
-const mapInfo = ref({ frameW: 0, frameH: 0, scale: 1, offX: 0, offY: 0 });
-const ctxRef = ref(null);
-
-let rafId = null;
-let ro = null;
-let lastDrawTs = 0;
-let lastDebugTs = 0;
+const wrapSize    = ref({ w: 0, h: 0 });
+const mapInfo     = ref({ frameW: 0, frameH: 0, scale: 1, offX: 0, offY: 0 });
+const ctxRef      = ref(null);
 const needsRedraw = ref(false);
+const lastDets    = ref([]);
 
-const DEV = import.meta?.env?.DEV ?? false;
-const DET_TOL_MS = 120;
-const SEEK_TRIM_MS = 2000;
-const SEEK_HOLD_MS = 250;
+let rafId      = null;
+let ro         = null;
+let lastDrawTs = 0;
 
-const controlsDisabled = computed(() => !store.videoSrc || store.isUploading);
+// ── computed ──────────────────────────────────────────────────
+const canPlay = computed(() =>
+  !!store.videoSrc && !store.isUploading && !store.isAnalyzing && store.detList.length > 0
+);
 
+// phase → 한글 레이블
+const phaseLabel = computed(() => {
+  if (store.analyzePhase === "zipping")   return "ZIP 생성 중";
+  if (store.analyzePhase === "done")      return "완료";
+  return "분석 + 크롭 중";
+});
+
+// 상단 진행바 색상
+const progressBarColor = computed(() => {
+  if (store.isUploading)                    return "bg-slate-400";
+  if (store.analyzePhase === "zipping")     return "bg-amber-400";
+  return "bg-sky-500";
+});
+
+// 오버레이 안 진행바 색상
+const overlayBarColor = computed(() => {
+  if (store.analyzePhase === "zipping") return "bg-amber-400";
+  return "bg-sky-400";
+});
+
+// 상단 진행바 너비
+const progressBarWidth = computed(() => {
+  if (store.isUploading)   return store.uploadProgress;
+  if (store.isAnalyzing)   return store.analyzeProgress;
+  return 0;
+});
+
+// ─── 업로드 완료 → 추론+크롭+다운로드 ───────────────────────
 async function onUploaded(payload) {
   errorMsg.value = "";
-  uiState.value = "UPLOADING";
-
+  uiState.value  = "UPLOADING";
   store.setVideoLocal(payload.src);
 
   try {
     await store.uploadVideo(payload.file);
+    uiState.value = "ANALYZING";
+    // 추론 + 크롭 동시 + 완료 시 자동 다운로드
+    await store.analyzeVideo(store.filename, 10, 0.4);
     uiState.value = "READY";
-    detBuffer.value = [];
-    lastDets.value = [];
-    metrics.value = {};
-    clearCanvas();
-    startWs();
+    needsRedraw.value = true;
   } catch (e) {
-    uiState.value = "ERROR";
-    errorMsg.value = e?.message || "upload failed";
+    if (e?.message === "cancelled") { uiState.value = "READY"; return; }
+    uiState.value  = "ERROR";
+    errorMsg.value = e?.message || "failed";
   }
 }
 
 function onCleared() {
-  stopWs();
+  store.cancelAnalyze();
   store.reset();
-  detBuffer.value = [];
-  lastDets.value = [];
-  metrics.value = {};
-  duration.value = 0;
+  duration.value    = 0;
   currentTime.value = 0;
-  progress.value = 0;
-  uiState.value = "NO_VIDEO";
+  progress.value    = 0;
+  lastDets.value    = [];
+  uiState.value     = "NO_VIDEO";
+  errorMsg.value    = "";
+  stopRaf();
   clearCanvas();
 }
 
-function startWs() {
-  errorMsg.value = "";
-  if (!store.filename) {
-    errorMsg.value = "No uploaded filename.";
-    return;
-  }
-  stopWs();
-
-  const socket = new WebSocket(`${WS_BASE}/ws/stream/upload`);
-  ws.value = socket;
-
-  socket.onopen = () => {
-    uiState.value = "AI_ON";
-    socket.send(JSON.stringify({ filename: store.filename }));
-  };
-
-  socket.onmessage = (evt) => {
-    let msg;
-    try {
-      msg = JSON.parse(evt.data);
-    } catch {
-      return;
-    }
-
-    if (msg.type === "meta") {
-      meta.value = {
-        fps_src: msg.fps_src ?? 30,
-        frame_w: msg.frame_w ?? 0,
-        frame_h: msg.frame_h ?? 0,
-        infer_stride: msg.infer_stride ?? 10,
-      };
-      updateMapInfo();
-      return;
-    }
-
-    if (msg.type === "error") {
-      uiState.value = "ERROR";
-      errorMsg.value = msg.message || "ws error";
-      return;
-    }
-
-    if (msg.type === "end") {
-      stopWs(false);
-      uiState.value = store.videoSrc ? "READY" : "NO_VIDEO";
-      return;
-    }
-
-    if (msg.type === "det") {
-      const fps = meta.value.fps_src || 30;
-      const t_ms = typeof msg.t_ms === "number"
-        ? msg.t_ms
-        : (msg.frame_index ? (msg.frame_index / fps) * 1000 : 0);
-
-      detBuffer.value.push({ t_ms, detections: msg.detections ?? [], frame_index: msg.frame_index ?? 0 });
-      trimDetBuffer(currentTime.value * 1000, 10000);
-      metrics.value = msg.metrics || {};
-      needsRedraw.value = true;
-    }
-  };
-
-  socket.onerror = () => {
-    uiState.value = "ERROR";
-    errorMsg.value = "WebSocket error";
-  };
-
-  socket.onclose = () => {
-    ws.value = null;
-  };
+function onCancelAnalyze() {
+  store.cancelAnalyze();
+  uiState.value = "READY";
 }
 
-function sendWsControl(action, payload = {}) {
-  if (!ws.value) return;
-  try {
-    ws.value.send(JSON.stringify({ type: "control", action, ...payload }));
-  } catch {}
+// ─── 비디오 이벤트 ────────────────────────────────────────────
+function onLoadedMetadata() {
+  if (!videoEl.value) return;
+  duration.value = videoEl.value.duration || 0;
+  videoEl.value.volume = volume.value;
+  updateMapInfo();
+  needsRedraw.value = true;
 }
 
-function stopWs(sendStop = true) {
-  if (ws.value) {
-    try {
-      if (sendStop) ws.value.send(JSON.stringify({ type: "control", action: "stop" }));
-    } catch {}
-    try { ws.value.close(); } catch {}
-  }
-  ws.value = null;
+function onTimeUpdate() {
+  if (!videoEl.value) return;
+  currentTime.value = videoEl.value.currentTime || 0;
+  progress.value    = duration.value ? currentTime.value / duration.value : 0;
+  needsRedraw.value = true;
 }
 
-function emitPlay() {
-  if (controlsDisabled.value) return;
-  videoEl.value?.play().catch(() => {});
+function onSeeking() {
+  isSeeking.value     = true;
+  seekHoldUntil.value = performance.now() + 150;
+  clearCanvas();
 }
 
-function emitPause() {
-  videoEl.value?.pause();
-}
+function onSeeked()  { isSeeking.value = false; needsRedraw.value = true; }
+function onPlay()    { startRaf(); }
+function onPause()   { stopRaf(); needsRedraw.value = true; updateOverlay(); }
+function emitPlay()  { if (canPlay.value) videoEl.value?.play().catch(() => {}); }
+function emitPause() { videoEl.value?.pause(); }
 
 function onVolumeChange(e) {
-  const val = parseFloat(e.target.value);
-  volume.value = isNaN(val) ? 0.5 : val;
+  volume.value = parseFloat(e.target.value) || 0.5;
   if (videoEl.value) videoEl.value.volume = volume.value;
 }
 
@@ -295,58 +283,13 @@ function onSeekInput(e) {
   const frac = Math.max(0, Math.min(1, parseFloat(e.target.value) || 0));
   videoEl.value.currentTime = frac * duration.value;
   currentTime.value = videoEl.value.currentTime || 0;
-  progress.value = duration.value ? currentTime.value / duration.value : 0;
+  progress.value    = duration.value ? currentTime.value / duration.value : 0;
 }
 
-function onLoadedMetadata() {
-  if (!videoEl.value) return;
-  duration.value = videoEl.value.duration || 0;
-  if (videoEl.value) videoEl.value.volume = volume.value;
-  updateMapInfo();
-  needsRedraw.value = true;
-}
-
-function onTimeUpdate() {
-  if (!videoEl.value) return;
-  currentTime.value = videoEl.value.currentTime || 0;
-  progress.value = duration.value ? currentTime.value / duration.value : 0;
-  needsRedraw.value = true;
-}
-
-function onSeeking() {
-  if (!videoEl.value) return;
-  isSeeking.value = true;
-  const t_ms = (videoEl.value.currentTime || 0) * 1000;
-  trimDetBuffer(t_ms, SEEK_TRIM_MS);
-  clearCanvas();
-  seekHoldUntil.value = performance.now() + SEEK_HOLD_MS;
-  sendWsControl("seek", { t_ms });
-}
-
-function onSeeked() {
-  isSeeking.value = false;
-  needsRedraw.value = true;
-}
-
-function onPlay() {
-  if (store.isUploading) {
-    videoEl.value?.pause();
-    return;
-  }
-  startRaf();
-}
-
-function onPause() {
-  stopRaf();
-  needsRedraw.value = true;
-}
-
+// ─── RAF ─────────────────────────────────────────────────────
 function startRaf() {
   if (rafId) return;
-  const loop = () => {
-    updateOverlay();
-    rafId = requestAnimationFrame(loop);
-  };
+  const loop = () => { updateOverlay(); rafId = requestAnimationFrame(loop); };
   rafId = requestAnimationFrame(loop);
 }
 
@@ -356,161 +299,117 @@ function stopRaf() {
   rafId = null;
 }
 
-function formatTime(sec) {
-  const s = Math.floor(sec || 0);
-  const m = Math.floor(s / 60);
-  const r = s % 60;
-  return `${m}:${r.toString().padStart(2, "0")}`;
-}
+watch(needsRedraw, (val) => { if (val && !rafId) updateOverlay(); });
 
-function resizeCanvas(wrapRect) {
+// ─── Canvas ───────────────────────────────────────────────────
+function resizeCanvas(rect) {
   const c = canvasEl.value;
-  if (!c || !wrapRect) return;
-
+  if (!c || !rect) return;
   const dpr = window.devicePixelRatio || 1;
-  wrapSize.value = { w: wrapRect.width, h: wrapRect.height, dpr };
-
-  c.width = Math.max(1, Math.floor(wrapRect.width * dpr));
-  c.height = Math.max(1, Math.floor(wrapRect.height * dpr));
-  c.style.width = `${wrapRect.width}px`;
-  c.style.height = `${wrapRect.height}px`;
-
+  wrapSize.value = { w: rect.width, h: rect.height };
+  c.width  = Math.max(1, Math.floor(rect.width  * dpr));
+  c.height = Math.max(1, Math.floor(rect.height * dpr));
+  c.style.width  = `${rect.width}px`;
+  c.style.height = `${rect.height}px`;
   const ctx = c.getContext("2d");
   if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctxRef.value = ctx;
-
   updateMapInfo();
   needsRedraw.value = true;
 }
 
 function updateMapInfo() {
-  const { w: wrapW, h: wrapH } = wrapSize.value;
-  if (!wrapW || !wrapH) return;
-
-  const frameW = meta.value.frame_w || videoEl.value?.videoWidth || 0;
-  const frameH = meta.value.frame_h || videoEl.value?.videoHeight || 0;
+  const { w: wW, h: wH } = wrapSize.value;
+  if (!wW || !wH) return;
+  const frameW = store.metaInfo?.frame_w || videoEl.value?.videoWidth  || 0;
+  const frameH = store.metaInfo?.frame_h || videoEl.value?.videoHeight || 0;
   if (!frameW || !frameH) return;
-
-  const scale = Math.min(wrapW / frameW, wrapH / frameH);
-  const drawW = frameW * scale;
-  const drawH = frameH * scale;
-  const offX = (wrapW - drawW) / 2;
-  const offY = (wrapH - drawH) / 2;
-
-  mapInfo.value = { frameW, frameH, scale, offX, offY };
+  const scale = Math.min(wW / frameW, wH / frameH);
+  mapInfo.value = {
+    frameW, frameH, scale,
+    offX: (wW - frameW * scale) / 2,
+    offY: (wH - frameH * scale) / 2,
+  };
 }
 
-function trimDetBuffer(t_ms, keepMs) {
-  const minT = t_ms - keepMs;
-  const maxT = t_ms + keepMs;
-  detBuffer.value = detBuffer.value.filter((d) => d.t_ms >= minT && d.t_ms <= maxT);
-}
-
-function selectDetForTime(t_ms_now) {
-  const buf = detBuffer.value;
-  if (!buf.length) return null;
-  let best = null;
-  let bestDiff = Infinity;
-  for (const d of buf) {
-    const diff = Math.abs((d.t_ms ?? 0) - t_ms_now);
-    if (diff < bestDiff) {
-      bestDiff = diff;
-      best = d;
-    }
+function selectNearestDet(t_ms_now) {
+  const list = store.detList;
+  if (!list.length) return null;
+  let best = list[0];
+  let bestDiff = Math.abs(list[0].t_ms - t_ms_now);
+  for (let i = 1; i < list.length; i++) {
+    const diff = Math.abs(list[i].t_ms - t_ms_now);
+    if (diff < bestDiff) { bestDiff = diff; best = list[i]; }
   }
-  if (bestDiff > DET_TOL_MS) return null;
-  return { ...best, delta: bestDiff };
+  return best;
 }
 
 function mapFrameToCanvas(det) {
   const { scale, offX, offY } = mapInfo.value;
-  const w = Math.max(0, (det.x2 - det.x1) * scale);
-  const h = Math.max(0, (det.y2 - det.y1) * scale);
   return {
     x: offX + det.x1 * scale,
     y: offY + det.y1 * scale,
-    w,
-    h,
+    w: Math.max(0, (det.x2 - det.x1) * scale),
+    h: Math.max(0, (det.y2 - det.y1) * scale),
   };
 }
 
 function updateOverlay() {
-  const v = videoEl.value;
+  const v   = videoEl.value;
   const ctx = ctxRef.value;
-  const { w: wrapW, h: wrapH } = wrapSize.value;
-  if (!v || !ctx || !wrapW || !wrapH) return;
+  const { w: wW, h: wH } = wrapSize.value;
+  if (!v || !ctx || !wW || !wH) return;
 
   const now = performance.now();
-  if (now - lastDrawTs < 33 && !needsRedraw.value) return; // <= ~30fps
+  if (now - lastDrawTs < 16 && !needsRedraw.value) return;
   lastDrawTs = now;
   needsRedraw.value = false;
 
-  if (isSeeking.value || now < seekHoldUntil.value) {
-    ctx.clearRect(0, 0, wrapW, wrapH);
-    return;
-  }
-
-  const t_ms_now = (v.currentTime || 0) * 1000;
-  const match = selectDetForTime(t_ms_now);
-  const dets = match?.detections ?? [];
-  lastDets.value = dets;
-
-  ctx.clearRect(0, 0, wrapW, wrapH);
+  ctx.clearRect(0, 0, wW, wH);
+  if (isSeeking.value || now < seekHoldUntil.value) return;
 
   const { frameW, frameH } = mapInfo.value;
   if (!frameW || !frameH) return;
+
+  const t_ms_now = (v.currentTime || 0) * 1000;
+  const match    = selectNearestDet(t_ms_now);
+  const dets     = match?.detections ?? [];
+  lastDets.value = dets;
 
   ctx.lineWidth = 2;
   ctx.font = "14px sans-serif";
 
   for (const det of dets) {
-    const mapped = mapFrameToCanvas(det);
-    if (mapped.w <= 0 || mapped.h <= 0) continue;
-
+    const m = mapFrameToCanvas(det);
+    if (m.w <= 0 || m.h <= 0) continue;
     ctx.strokeStyle = "lime";
-    ctx.strokeRect(mapped.x, mapped.y, mapped.w, mapped.h);
-
-    const cls = det.cls ?? "obj";
-    const conf = det.conf ?? 0;
-    const id = det.id != null ? `#${det.id}` : "";
-    const label = `${cls}${id} ${conf.toFixed ? conf.toFixed(2) : conf}`;
-
+    ctx.strokeRect(m.x, m.y, m.w, m.h);
+    const label = `${det.cls ?? "obj"}${det.id != null ? " #" + det.id : ""} ${det.conf?.toFixed(2) ?? ""}`;
     ctx.fillStyle = "lime";
-    ctx.fillText(label, mapped.x, Math.max(14, mapped.y - 6));
-  }
-
-  if (DEV && now - lastDebugTs > 500) {
-    lastDebugTs = now;
-    const delta = match?.delta ?? null;
-    console.log(
-      "[playback] t_ms:", Math.round(t_ms_now),
-      "sel_t:", match?.t_ms ?? null,
-      "delta:", delta != null ? Math.round(delta) : null,
-      "buf:", detBuffer.value.length
-    );
+    ctx.fillText(label, m.x, Math.max(14, m.y - 6));
   }
 }
 
 function clearCanvas() {
   const ctx = ctxRef.value;
-  const { w: wrapW, h: wrapH } = wrapSize.value;
-  if (!ctx || !wrapW || !wrapH) return;
-  ctx.clearRect(0, 0, wrapW, wrapH);
+  const { w: wW, h: wH } = wrapSize.value;
+  if (ctx && wW && wH) ctx.clearRect(0, 0, wW, wH);
 }
 
-watch(
-  () => store.isUploading,
-  (val) => {
-    if (val) videoEl.value?.pause();
-  }
-);
+function formatTime(sec) {
+  const s = Math.floor(sec || 0);
+  return `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, "0")}`;
+}
+
+watch(() => store.detList.length, (len) => {
+  if (len > 0) { updateMapInfo(); needsRedraw.value = true; }
+});
 
 onMounted(() => {
   if (wrapEl.value) {
     ro = new ResizeObserver((entries) => {
       const rect = entries[0]?.contentRect;
-      if (!rect) return;
-      resizeCanvas(rect);
+      if (rect) resizeCanvas(rect);
     });
     ro.observe(wrapEl.value);
   }
@@ -518,11 +417,10 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   stopRaf();
-  stopWs();
-  if (ro) {
-    ro.disconnect();
-    ro = null;
-  }
+  store.cancelAnalyze();
+  store.reset();
+  clearCanvas();
+  if (ro) { ro.disconnect(); ro = null; }
 });
 </script>
 
@@ -535,64 +433,40 @@ onBeforeUnmount(() => {
   overflow: hidden;
   background: #0b1220;
 }
-
 .video-el {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-  z-index: 1;
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  object-fit: contain; z-index: 1;
 }
-
 .video-placeholder {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  text-align: center;
+  position: absolute; inset: 0;
+  display: grid; place-items: center; text-align: center;
   background: radial-gradient(circle at 30% 20%, rgba(255,255,255,0.08), transparent 55%),
               radial-gradient(circle at 70% 80%, rgba(255,255,255,0.06), transparent 55%);
 }
-
 .overlay-canvas {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  z-index: 2;
-  pointer-events: none;
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  z-index: 2; pointer-events: none;
 }
-
-.volume-slider {
-  width: 120px;
+.task-overlay {
+  position: absolute; inset: 0;
+  background: rgba(0, 0, 0, 0.70);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 10;
 }
-
-.progress-slider {
-  width: 200px;
-}
-
+.volume-slider   { width: 120px; }
+.progress-slider { width: 200px; }
 .icon-btn {
-  width: 40px;
-  height: 40px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 999px;
-  font-size: 18px;
-  padding: 0;
+  width: 40px; height: 40px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 999px; font-size: 18px; padding: 0;
 }
-
 .spinner {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
+  width: 12px; height: 12px; border-radius: 50%;
   border: 2px solid rgba(148,163,184,0.5);
   border-top-color: rgba(15,23,42,0.9);
   animation: spin 0.8s linear infinite;
 }
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
+@keyframes spin { to { transform: rotate(360deg); } }
 </style>

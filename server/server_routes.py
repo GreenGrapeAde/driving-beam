@@ -4,14 +4,18 @@ import base64
 import asyncio
 import json
 import time
+import shutil
+import tempfile
+import zipfile
 import numpy as np
 
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
+from datetime import datetime
 
-from fastapi import APIRouter, UploadFile, WebSocket, WebSocketDisconnect, Request
+from fastapi import APIRouter, UploadFile, WebSocket, WebSocketDisconnect, Request, Body, HTTPException
+from fastapi.responses import FileResponse
 
-# AI
 import torch
 from ultralytics import YOLO, RTDETR
 
@@ -28,12 +32,10 @@ class AppConfig:
     upload_infer_stride: int = 10
     live_infer_stride: int = 1
 
-
 @dataclass
 class ManualCache:
     previews: List[str] = field(default_factory=list)
     total: int = 0
-
     last_video_path: str = ""
     last_roi_frame: Optional[Dict[str, int]] = None
     last_t_sec: float = 0.0
@@ -41,297 +43,452 @@ class ManualCache:
     last_start_sec: float = 0.0
 
 
+@dataclass
+class DetCache:
+    data:   Dict[str, Dict[int, Any]] = field(default_factory=dict)
+    fps:    Dict[str, float]           = field(default_factory=dict)
+    size:   Dict[str, tuple]           = field(default_factory=dict)
+    stride: Dict[str, int]             = field(default_factory=dict)
+
+
+# =========================
+# Post-NMS / 필터
+# =========================
+def _post_nms(dets: List[Dict], iou_thr: float = 0.4) -> List[Dict]:
+    if len(dets) <= 1:
+        return dets
+    dets = sorted(dets, key=lambda d: d["conf"], reverse=True)
+
+    def iou(a, b):
+        ix1 = max(a["x1"], b["x1"]); iy1 = max(a["y1"], b["y1"])
+        ix2 = min(a["x2"], b["x2"]); iy2 = min(a["y2"], b["y2"])
+        inter = max(0, ix2-ix1) * max(0, iy2-iy1)
+        if inter == 0: return 0.0
+        aa = (a["x2"]-a["x1"]) * (a["y2"]-a["y1"])
+        ab = (b["x2"]-b["x1"]) * (b["y2"]-b["y1"])
+        return inter / (aa + ab - inter)
+
+    keep = []; suppressed = [False] * len(dets)
+    for i in range(len(dets)):
+        if suppressed[i]: continue
+        keep.append(dets[i])
+        for j in range(i+1, len(dets)):
+            if not suppressed[j] and iou(dets[i], dets[j]) >= iou_thr:
+                suppressed[j] = True
+    return keep
+
+
+def _filter_large_boxes(dets, frame_w, frame_h, max_area_ratio=0.5):
+    fa = frame_w * frame_h
+    return [d for d in dets if (d["x2"]-d["x1"])*(d["y2"]-d["y1"])/fa <= max_area_ratio]
+
+
+# =========================
+# ModelManager
+# =========================
 class ModelManager:
     def __init__(self):
-        self.model_kind = os.getenv("MODEL_KIND", "RTDETR")  # "YOLO" or "RTDETR"
-        self.model_path = os.getenv("MODEL_PATH", "rtdetr-l.pt")
-        self.model_imgsz = int(os.getenv("MODEL_IMGSZ", "1280"))
-        self.model_conf = float(os.getenv("MODEL_CONF", "0.25"))
-
-        # COCO 기�? ?�동�??�토바이/버스/?�럭�?
-        self.target_classes = [2, 3, 5, 7]
-
-        self.tracker_cfg = os.getenv("TRACKER_CFG", "botsort.yaml")  # or "bytetrack.yaml"
-
+        self.model_kind         = os.getenv("MODEL_KIND", "RTDETR")
+        self.model_path         = os.getenv("MODEL_PATH", "rtdetr-l.pt")
+        self.model_imgsz        = int(os.getenv("MODEL_IMGSZ", "640"))
+        self.model_conf         = float(os.getenv("MODEL_CONF", "0.35"))
+        self.model_iou          = float(os.getenv("MODEL_IOU", "0.3"))
+        self.post_nms_iou       = float(os.getenv("POST_NMS_IOU", "0.4"))
+        self.max_box_area_ratio = float(os.getenv("MAX_BOX_AREA_RATIO", "0.5"))
+        _cls = os.getenv("TARGET_CLASSES", "2,5,7")
+        self.target_classes = [int(c.strip()) for c in _cls.split(",")]
         self.device = "cuda:0" if torch.cuda.is_available() else "cpu"
         self._model = None
 
     def get_model(self):
         if self._model is None:
-            if self.model_kind.upper() == "RTDETR" or ("rtdetr" in self.model_path.lower()):
+            if self.model_kind.upper() == "RTDETR" or "rtdetr" in self.model_path.lower():
                 self._model = RTDETR(self.model_path)
             else:
                 self._model = YOLO(self.model_path)
-
-            # 명시?�으�?device ?�리�?가?�하�?
-            try:
-                self._model.to(self.device)
-            except Exception:
-                pass
+            try: self._model.to(self.device)
+            except: pass
         return self._model
 
     def run_ai_inference(self, frame_bgr) -> List[Dict[str, Any]]:
-        model = self.get_model()
+        model     = self.get_model()
         frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        is_rtdetr = self.model_kind.upper() == "RTDETR" or "rtdetr" in self.model_path.lower()
 
-        results = model.track(
-            source=frame_rgb,
-            imgsz=self.model_imgsz,
-            conf=self.model_conf,
-            classes=self.target_classes,
-            tracker=self.tracker_cfg,
-            persist=True,
-            device=self.device,
-            verbose=False,
+        results = model.predict(
+            source=frame_rgb, imgsz=self.model_imgsz,
+            conf=self.model_conf, iou=self.model_iou,
+            classes=self.target_classes, device=self.device,
+            half=True, verbose=False,
+        ) if is_rtdetr else model.track(
+            source=frame_rgb, imgsz=self.model_imgsz,
+            conf=self.model_conf, iou=self.model_iou,
+            classes=self.target_classes, device=self.device,
+            half=True, verbose=False,
         )
 
-        r0 = results[0]
-        dets: List[Dict[str, Any]] = []
+        r0  = results[0]
+        ids = None
+        if not is_rtdetr:
+            try: ids = r0.boxes.id
+            except: pass
+
+        dets = []
         if r0.boxes is None or len(r0.boxes) == 0:
             return dets
 
         names = r0.names
-        h, w = frame_bgr.shape[:2]
-
-        ids = None
-        try:
-            ids = r0.boxes.id
-        except Exception:
-            ids = None
+        h, w  = frame_bgr.shape[:2]
 
         for i, b in enumerate(r0.boxes):
             x1, y1, x2, y2 = b.xyxy[0].tolist()
-            conf = float(b.conf[0].item()) if hasattr(b.conf[0], "item") else float(b.conf[0])
-            cls_id = int(b.cls[0].item()) if hasattr(b.cls[0], "item") else int(b.cls[0])
-
-            x1 = max(0, min(w - 1, int(round(x1))))
-            y1 = max(0, min(h - 1, int(round(y1))))
-            x2 = max(0, min(w - 1, int(round(x2))))
-            y2 = max(0, min(h - 1, int(round(y2))))
-
-            try:
-                cls_name = names[cls_id]
-            except Exception:
-                cls_name = str(cls_id)
-
-            det = {"x1": x1, "y1": y1, "x2": x2, "y2": y2, "cls": str(cls_name), "conf": float(conf)}
-
+            conf   = float(b.conf[0].item()) if hasattr(b.conf[0], "item") else float(b.conf[0])
+            cls_id = int(b.cls[0].item())    if hasattr(b.cls[0],  "item") else int(b.cls[0])
+            x1 = max(0, min(w-1, int(round(x1)))); y1 = max(0, min(h-1, int(round(y1))))
+            x2 = max(0, min(w-1, int(round(x2)))); y2 = max(0, min(h-1, int(round(y2))))
+            cls_name = names.get(cls_id, str(cls_id)) if isinstance(names, dict) else (
+                names[cls_id] if cls_id < len(names) else str(cls_id))
+            det = {"x1": x1, "y1": y1, "x2": x2, "y2": y2,
+                   "cls": str(cls_name), "conf": float(conf)}
             if ids is not None:
-                try:
-                    det["id"] = int(ids[i].item())
-                except Exception:
-                    pass
-
+                try: det["id"] = int(ids[i].item())
+                except: pass
             dets.append(det)
 
+        dets = _post_nms(dets, self.post_nms_iou)
+        dets = _filter_large_boxes(dets, w, h, self.max_box_area_ratio)
         return dets
 
 
 @dataclass
 class AppState:
-    config: AppConfig
-    manual: ManualCache = field(default_factory=ManualCache)
+    config:    AppConfig
+    manual:    ManualCache  = field(default_factory=ManualCache)
     model_mgr: ModelManager = field(default_factory=ModelManager)
+    det_cache: DetCache      = field(default_factory=DetCache)
 
 
 def get_state(request_or_ws) -> AppState:
-    # Request / WebSocket 모두 .app.state ?�근 가??
     return request_or_ws.app.state.app_state
 
 
 # =========================
-# Utils
+# Amodal crop 헬퍼
 # =========================
-def draw_detections(frame_bgr, detections):
-    out = frame_bgr.copy()
-    cls_count = {}
+def _ensure_dirs(root):
+    for s in ["train", "valid", "test"]:
+        os.makedirs(os.path.join(root, s, "images"), exist_ok=True)
+        os.makedirs(os.path.join(root, s, "labels"), exist_ok=True)
 
-    for det in detections:
-        x1 = int(det.get("x1", 0))
-        y1 = int(det.get("y1", 0))
-        x2 = int(det.get("x2", 0))
-        y2 = int(det.get("y2", 0))
-        cls = str(det.get("cls", "obj"))
-        conf = float(det.get("conf", 0.0))
+def _write_dataset_yaml(root):
+    with open(os.path.join(root, "dataset.yaml"), "w") as f:
+        f.write("path: .\ntrain: train/images\nval: valid/images\ntest: test/images\n\n"
+                "names:\n  0: car\n  1: bus\n  2: truck\n")
 
-        cls_count[cls] = cls_count.get(cls, 0) + 1
-        label = f"{cls}{cls_count[cls]} {conf:.2f}"
+def _write_readme(root, stats):
+    with open(os.path.join(root, "README.txt"), "w") as f:
+        for k, v in stats.items(): f.write(f"- {k}: {v}\n")
 
-        cv2.rectangle(out, (x1, y1), (x2, y2), (0, 255, 0), 2)
-        cv2.putText(out, label, (x1, max(20, y1 - 8)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-    return out
+def _coco_to_occ(cls_name):
+    n = (cls_name or "").lower()
+    if n == "car":   return 0
+    if n == "bus":   return 1
+    if n == "truck": return 2
+    return None
 
+def _pick_split(idx):
+    r = idx % 10
+    return "train" if r < 8 else ("valid" if r < 9 else "test")
 
-def frame_to_base64_jpg(frame_bgr, quality=80):
-    ok, buffer = cv2.imencode(".jpg", frame_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
-    if not ok:
-        return None
-    return base64.b64encode(buffer).decode("utf-8")
+def _bbox_to_yolo(ox1, oy1, ox2, oy2, cx1, cy1, cw, ch):
+    rx1 = max(0, min(cw, ox1-cx1)); ry1 = max(0, min(ch, oy1-cy1))
+    rx2 = max(0, min(cw, ox2-cx1)); ry2 = max(0, min(ch, oy2-cy1))
+    if rx2 <= rx1 or ry2 <= ry1: return None
+    return (f"{(rx1+rx2)/2/cw:.6f} {(ry1+ry2)/2/ch:.6f} "
+            f"{(rx2-rx1)/cw:.6f} {(ry2-ry1)/ch:.6f}")
+
+def _crop_and_save(frame, det, frame_w, frame_h, target_line,
+                   ds_root, img_idx) -> bool:
+    """
+    det 하나를 amodal 크롭하여 저장.
+    성공하면 True, 건너뛰면 False 반환.
+    """
+    occ_cls = _coco_to_occ(det.get("cls"))
+    if occ_cls is None:
+        return False
+
+    ox1, oy1 = int(det["x1"]), int(det["y1"])
+    ox2, oy2 = int(det["x2"]), int(det["y2"])
+
+    # 중심이 target_line 오른쪽이면 스킵
+    if (ox1 + ox2) // 2 > target_line:
+        return False
+
+    cls_name = det.get("cls", "").lower()
+    box_h    = oy2 - oy1
+    ext_y2   = int(oy1 + box_h * (4.0 if cls_name == "car" else 1.8))
+
+    cx1 = max(0, ox1);       cy1 = max(0, oy1)
+    cx2 = min(frame_w, ox2); cy2 = min(frame_h, ext_y2)
+    if cx2 <= cx1 or cy2 <= cy1:
+        return False
+
+    crop = frame[cy1:cy2, cx1:cx2]
+    if crop.size == 0:
+        return False
+
+    split = _pick_split(img_idx)
+    stem  = f"sample_{img_idx:06d}"
+    img_p = os.path.join(ds_root, split, "images", f"{stem}.jpg")
+    lbl_p = os.path.join(ds_root, split, "labels", f"{stem}.txt")
+
+    if not cv2.imwrite(img_p, crop):
+        return False
+
+    yolo = _bbox_to_yolo(ox1, oy1, ox2, oy2, cx1, cy1, cx2-cx1, cy2-cy1)
+    if yolo is None:
+        os.remove(img_p)
+        return False
+
+    with open(lbl_p, "w") as f:
+        f.write(f"{occ_cls} {yolo}\n")
+
+    return True
 
 
 # =========================
-# 1) ?�로???�상 API
+# 1) 영상 업로드
 # =========================
 @router.post("/upload_video")
 async def upload_video(request: Request, file: UploadFile):
     st = get_state(request)
-    save_path = os.path.join(st.config.video_dir, file.filename)
+    ts_prefix     = int(time.time() * 1000)
+    safe_filename = f"{ts_prefix}_{file.filename}"
+    save_path     = os.path.join(st.config.video_dir, safe_filename)
+    content       = await file.read()
     with open(save_path, "wb") as f:
-        f.write(await file.read())
-    return {"message": "upload success", "filename": file.filename, "path": save_path}
+        f.write(content)
+    return {
+        "message": "upload success",
+        "filename": safe_filename,
+        "original_filename": file.filename,
+        "path": save_path,
+    }
 
 
 # =========================
-# 2) ?�로???�상 ?�트리밍
+# 2) 추론 + 크롭 동시 처리 WebSocket
+#
+#   클라이언트 → 서버: {filename, infer_stride, left_ratio}
+#   서버 → 클라이언트:
+#     {type:"meta", fps_src, frame_w, frame_h, ...}
+#     {type:"progress", progress, written, remaining_sec}
+#     {type:"zipping"}                     ← ZIP 생성 시작 알림
+#     {type:"done", download_url, zip_name, written}
+#     {type:"error", message}
+#     {type:"cancelled"}
 # =========================
-@router.websocket("/ws/stream/upload")
-async def stream_uploaded_video(ws: WebSocket):
+@router.websocket("/ws/analyze")
+async def analyze_video(ws: WebSocket):
     await ws.accept()
-    st = get_state(ws)
+    st      = get_state(ws)
+    cap     = None
+    tmp_dir = None
 
     try:
-        init_msg = await ws.receive_text()
-        init = json.loads(init_msg)
-        filename = (init.get("filename") or "").strip()
-        video_path = os.path.join(st.config.video_dir, filename)
+        init_msg     = await ws.receive_text()
+        init         = json.loads(init_msg)
+        filename     = (init.get("filename") or "").strip()
+        infer_stride = int(init.get("infer_stride") or st.config.upload_infer_stride)
+        left_ratio   = float(init.get("left_ratio") or 0.4)
+        video_path   = os.path.join(st.config.video_dir, filename)
 
         if not os.path.exists(video_path):
             await ws.send_text(json.dumps({"type": "error", "message": "file not found"}))
-            await ws.close()
             return
 
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             await ws.send_text(json.dumps({"type": "error", "message": "cannot open video"}))
-            await ws.close()
             return
 
-        fps_src = cap.get(cv2.CAP_PROP_FPS) or float(st.config.target_fps)
-        frame_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
-        frame_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+        fps_src      = cap.get(cv2.CAP_PROP_FPS) or float(st.config.target_fps)
+        frame_w      = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)  or 0)
+        frame_h      = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)  or 0)
+        infer_frames = max(1, total_frames // infer_stride)
+        target_line  = int(frame_w * left_ratio)
 
-        infer_stride = st.config.upload_infer_stride
-        frame_count = 0
-        last_detections = []
-
-        # 메�? 먼�? 보내�?(?�라 overlay ?��???계산???�요)
         await ws.send_text(json.dumps({
             "type": "meta",
-            "mode": "upload",
-            "fps_src": fps_src,
-            "frame_w": frame_w,
-            "frame_h": frame_h,
-            "infer_stride": infer_stride,
+            "fps_src": fps_src, "frame_w": frame_w, "frame_h": frame_h,
+            "total_frames": total_frames, "infer_frames": infer_frames,
+            "infer_stride": infer_stride, "left_ratio": left_ratio,
         }))
 
-        paused = False
-        stop_flag = False
-        end_sent = False
+        # 데이터셋 임시 디렉토리 준비
+        export_dir = os.getenv("EXPORT_DIR", "exports")
+        os.makedirs(export_dir, exist_ok=True)
+        tmp_dir     = tempfile.mkdtemp(prefix="occ_export_")
+        created_at  = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        ds_name     = f"occ_dataset_{created_at}"
+        ds_root     = os.path.join(tmp_dir, ds_name)
+        os.makedirs(ds_root, exist_ok=True)
+        _ensure_dirs(ds_root)
+        _write_dataset_yaml(ds_root)
 
-        t0 = time.time()
-        sent = 0
+        det_map     = {}   # playback 오버레이용 캐시
+        frame_count = 0
+        infer_count = 0
+        img_idx     = 0    # 저장된 이미지 인덱스
+        written     = 0    # 저장 성공 수
+        t0          = time.time()
+        last_pct    = -1
 
         while cap.isOpened():
-            # ---- control 처리 ----
-            while True:
-                try:
-                    msg = await asyncio.wait_for(ws.receive_text(), timeout=0.003)
-                    ctrl = json.loads(msg)
-                    if ctrl.get("type") == "control":
-                        action = ctrl.get("action")
-                        if action == "pause":
-                            paused = True
-                            await ws.send_text(json.dumps({"type": "state", "state": "PAUSED"}))
-                        elif action == "resume":
-                            paused = False
-                            await ws.send_text(json.dumps({"type": "state", "state": "PLAYING"}))
-                        elif action == "seek":
-                            try:
-                                t_ms = float(ctrl.get("t_ms") or 0.0)
-                                cap.set(cv2.CAP_PROP_POS_MSEC, t_ms)
-                                frame_count = int(round((t_ms / 1000.0) * fps_src))
-                                last_detections = []
-                                t0 = time.time()
-                                sent = 0
-                                await ws.send_text(json.dumps({"type": "state", "state": "SEEKED", "t_ms": t_ms}))
-                            except Exception:
-                                await ws.send_text(json.dumps({"type": "state", "state": "SEEK_FAILED"}))
-                        elif action == "stop":
-                            stop_flag = True
-                            await ws.send_text(json.dumps({"type": "end", "mode": "upload", "message": "stopped"}))
-                            end_sent = True
-                            break
-                except asyncio.TimeoutError:
-                    break
-                except WebSocketDisconnect:
-                    stop_flag = True
-                    break
-                except Exception:
-                    break
-
-            if stop_flag:
-                break
-
-            if paused:
-                await asyncio.sleep(0.05)
-                continue
+            # 취소 메시지 확인
+            try:
+                msg  = await asyncio.wait_for(ws.receive_text(), timeout=0.001)
+                ctrl = json.loads(msg)
+                if ctrl.get("type") == "control" and ctrl.get("action") == "cancel":
+                    await ws.send_text(json.dumps({"type": "cancelled"}))
+                    return
+            except asyncio.TimeoutError:
+                pass
+            except WebSocketDisconnect:
+                return
 
             ret, frame = cap.read()
             if not ret:
                 break
 
             frame_count += 1
+            if frame_count % infer_stride != 0:
+                continue
 
-            # ?�재 ?�레??timestamp(ms)
-            t_ms = float(cap.get(cv2.CAP_PROP_POS_MSEC) or 0.0)
+            # ── 추론 ──────────────────────────────────────
+            dets = st.model_mgr.run_ai_inference(frame)
+            t_ms = (frame_count / fps_src) * 1000.0
 
-            # inference??stride마다
-            if frame_count % infer_stride == 0:
-                last_detections = st.model_mgr.run_ai_inference(frame)
+            # playback 오버레이용 캐시 저장
+            det_map[frame_count] = {"t_ms": t_ms, "detections": dets}
 
-                sent += 1
-                elapsed = max(1e-6, time.time() - t0)
-                server_fps = sent / elapsed
+            # ── 추론 결과로 즉시 크롭 저장 ────────────────
+            for det in dets:
+                ok = _crop_and_save(
+                    frame, det, frame_w, frame_h, target_line,
+                    ds_root, img_idx,
+                )
+                if ok:
+                    img_idx += 1
+                    written += 1
 
-                # det-only payload
+            infer_count += 1
+
+            # 진행률 (1% 단위)
+            pct = min(99, int(infer_count / infer_frames * 100))
+            if pct != last_pct:
+                last_pct = pct
+                elapsed  = time.time() - t0
+                fps_est  = infer_count / max(elapsed, 1e-6)
+                eta      = max(0, (infer_frames - infer_count) / max(fps_est, 1e-6))
                 await ws.send_text(json.dumps({
-                    "type": "det",
-                    "mode": "upload",
-                    "frame_index": frame_count,
-                    "t_ms": t_ms,
-                    "detections": last_detections,
-                    "metrics": {"server_fps": server_fps, "infer_stride": infer_stride}
+                    "type":          "progress",
+                    "progress":      pct,
+                    "written":       written,
+                    "remaining_sec": round(eta),
                 }))
+                await asyncio.sleep(0)  # event loop yield
 
-            # ?�무 빨리 루프가 ?�는 것만 방�? (?�하�??�거 가??
-            await asyncio.sleep(0)
+        # ── 메모리 캐시 저장 (playback 오버레이용) ────────
+        st.det_cache.data[filename]   = det_map
+        st.det_cache.fps[filename]    = fps_src
+        st.det_cache.size[filename]   = (frame_w, frame_h)
+        st.det_cache.stride[filename] = infer_stride
 
-        cap.release()
+        # ── ZIP 생성 알림 ─────────────────────────────────
+        await ws.send_text(json.dumps({"type": "zipping", "progress": 99, "written": written}))
+        await asyncio.sleep(0)
 
-        if not end_sent:
-            try:
-                await ws.send_text(json.dumps({"type": "end", "mode": "upload", "message": "ended"}))
-            except Exception:
-                pass
+        # ── README 작성 ───────────────────────────────────
+        _write_readme(ds_root, {
+            "created_at":   created_at,
+            "total_images": written,
+            "left_ratio":   left_ratio,
+            "splits":       "train:valid:test=8:1:1",
+        })
 
-        try:
-            await ws.close()
-        except Exception:
-            pass
+        # ── ZIP 압축 ──────────────────────────────────────
+        zip_name = f"{ds_name}.zip"
+        zip_path = os.path.join(export_dir, zip_name)
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for rd, _, files in os.walk(ds_root):
+                for fn in files:
+                    abs_p = os.path.join(rd, fn)
+                    zf.write(abs_p, os.path.relpath(abs_p, tmp_dir))
+
+        await ws.send_text(json.dumps({
+            "type":         "done",
+            "progress":     100,
+            "written":      written,
+            "zip_name":     zip_name,
+            "download_url": f"/export_download/{zip_name}",
+            "total_inferred": infer_count,
+        }))
 
     except WebSocketDisconnect:
-        print("Upload WebSocket disconnected")
+        pass
     except Exception as e:
-        print("Upload WebSocket error:", e)
-        try:
-            await ws.send_text(json.dumps({"type": "error", "message": str(e)}))
-        except Exception:
-            pass
-        try:
-            await ws.close()
-        except Exception:
-            pass
+        print("Analyze WS error:", e)
+        try: await ws.send_text(json.dumps({"type": "error", "message": str(e)}))
+        except: pass
+    finally:
+        if cap is not None:
+            cap.release()
+        if tmp_dir:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        try: await ws.close()
+        except: pass
+
+
+# =========================
+# 3) 전체 det 조회 (playback 오버레이용)
+# =========================
+@router.get("/det/all")
+async def get_det_all(request: Request, filename: str):
+    st = get_state(request)
+    det_map = st.det_cache.data.get(filename)
+    if det_map is None:
+        raise HTTPException(status_code=404, detail="no cache. analyze first.")
+
+    result = [
+        {"frame_index": fi, "t_ms": entry["t_ms"], "detections": entry["detections"]}
+        for fi, entry in sorted(det_map.items())
+    ]
+    return {
+        "filename":     filename,
+        "fps_src":      st.det_cache.fps[filename],
+        "frame_w":      st.det_cache.size[filename][0],
+        "frame_h":      st.det_cache.size[filename][1],
+        "infer_stride": st.det_cache.stride[filename],
+        "count":        len(result),
+        "detections":   result,
+    }
+
+
+# =========================
+# 4) ZIP 다운로드
+# =========================
+@router.get("/export_download/{zip_name}")
+async def export_download(zip_name: str):
+    export_dir = os.getenv("EXPORT_DIR", "exports")
+    zip_path   = os.path.join(export_dir, zip_name)
+    if not os.path.exists(zip_path):
+        raise HTTPException(status_code=404, detail="zip not found")
+    return FileResponse(
+        path=zip_path, media_type="application/zip", filename=zip_name,
+        headers={"Content-Disposition": f'attachment; filename="{zip_name}"'},
+    )
 
 
 # =========================
@@ -373,7 +530,7 @@ def _convert_roi(roi, frame_w, frame_h, disp_w, disp_h):
 
 
 # =========================
-# Manual - ROI 추출 ?�청 API (preview ?�성)
+# Manual - ROI ì¶”ì¶œ ?”ì²­ API (preview ?ì„±)
 # =========================
 @router.post("/manual/extract")
 async def manual_extract(request: Request, payload: dict):
@@ -393,7 +550,7 @@ async def manual_extract(request: Request, payload: dict):
     if (not video_path) or (roi is None) or (t_sec is None):
         return {"ok": False, "error": "missing parameters"}
 
-    # ROI ?�효??체크
+    # ROI ? íš¨??ì²´í¬
     try:
         if float(roi.get("w", 0)) <= 0 or float(roi.get("h", 0)) <= 0:
             return {"ok": False, "error": "ROI required"}
@@ -423,7 +580,7 @@ async def manual_extract(request: Request, payload: dict):
     frame_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     frame_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-    # display -> frame ROI 변??
+    # display -> frame ROI ë³€??
     if disp_w and disp_h:
         try:
             roi_frame = _convert_roi(roi, frame_w, frame_h, float(disp_w), float(disp_h))
@@ -433,10 +590,10 @@ async def manual_extract(request: Request, payload: dict):
     else:
         roi_frame = roi
 
-    # ?�작 ?�점 ?�동
+    # ?œìž‘ ?œì  ?´ë™
     cap.set(cv2.CAP_PROP_POS_MSEC, start_sec * 1000.0)
 
-    # t�??�안 "?�속" ?�레????= t * 30
+    # tì´??™ì•ˆ "?°ì†" ?„ë ˆ????= t * 30
     total_frames = max(int(round(t_sec_f * fps)), 1)
 
     x = int(roi_frame["x"]); y = int(roi_frame["y"])
@@ -450,7 +607,7 @@ async def manual_extract(request: Request, payload: dict):
 
     previews: List[str] = []
 
-    # ?�?��? ???�고 preview�?만든??
+    # ?€?¥ì? ???˜ê³  previewë§?ë§Œë“ ??
     for _ in range(total_frames):
         ret, frame = cap.read()
         if not ret:
@@ -465,7 +622,7 @@ async def manual_extract(request: Request, payload: dict):
 
     cap.release()
 
-    # cache ?�??app.state)
+    # cache ?€??app.state)
     st.manual.previews = previews
     st.manual.total = len(previews)
 
@@ -477,8 +634,8 @@ async def manual_extract(request: Request, payload: dict):
 
     return {
         "ok": True,
-        "total": st.manual.total,       # ?�상?�면 t=1 -> 30
-        "items": previews,              # 그리?�로 바로 보여주기 ?�하�??�체 반환
+        "total": st.manual.total,       # ?•ìƒ?´ë©´ t=1 -> 30
+        "items": previews,              # ê·¸ë¦¬?œë¡œ ë°”ë¡œ ë³´ì—¬ì£¼ê¸° ?¸í•˜ê²??„ì²´ ë°˜í™˜
         "roiFrame": {"x": x, "y": y, "w": w, "h": h},
         "startSec": start_sec,
         "requestedFrames": total_frames,
@@ -487,7 +644,7 @@ async def manual_extract(request: Request, payload: dict):
 
 
 # =========================
-# Manual - preview 가?�오�?
+# Manual - preview ê°€?¸ì˜¤ê¸?
 # =========================
 @router.get("/manual/preview")
 async def manual_preview(request: Request, index: int):
@@ -508,7 +665,7 @@ async def manual_preview(request: Request, index: int):
 
 
 # =========================
-# Manual - ?�??(BMP)
+# Manual - ?€??(BMP)
 # =========================
 @router.post("/manual/save")
 async def manual_save(request: Request):
