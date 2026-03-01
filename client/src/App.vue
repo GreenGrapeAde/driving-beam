@@ -2,12 +2,15 @@
   <div class="app-shell">
     <Sidebar :mode="mode" @update:mode="mode = $event" />
 
-    <main class="content">
-      <DashboardHeader :mode="mode" />
+  <main class="content">
+    <div class="content-body">         <!-- 이 안에서만 스크롤 -->
+      <DashboardHeader :mode="mode" />   <!-- 헤더: flex item, 고정 높이 -->
+      <div style="margin: -10px -28px 20px -28px; border-bottom: 1px solid rgba(15, 23, 42, 0.08);" /> <!-- 구분선 -->
       <LiveView v-if="mode === 'live'" :mode="mode" />
       <PlaybackView v-else-if="mode === 'playback'" :mode="mode" />
-      <ManualCrop v-else />
-    </main>
+      <ManualCrop :mode="mode" ref="manualCropRef" v-else />
+    </div>
+  </main>
 
     <!-- Chat widget layout with toggle -->
     <div class="chat-shell">
@@ -34,7 +37,7 @@
 </template>
 
 <script setup>
-import { ref } from "vue";
+import { ref, watch } from "vue";
 import Sidebar from "./components/layout/Sidebar.vue";
 import DashboardHeader from "./components/layout/DashboardHeader.vue";
 import ManualCrop from "./components/dashboard/ManualCrop.vue";
@@ -47,4 +50,13 @@ const chatOpen = ref(false);
 function toggleChat() {
   chatOpen.value = !chatOpen.value;
 }
+
+const manualCropRef = ref(null);
+
+watch(mode, (newMode, oldMode) => {
+  if (oldMode === 'manual' && newMode !== 'manual') {
+    manualCropRef.value?.onCleared();
+  }
+});
+
 </script>

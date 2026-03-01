@@ -173,7 +173,10 @@ function onCleared() {
   store.setVideoLocal("");
   store.videoPath = "";
   store.resetInputs();
+  videoOverlay.value?.clearSelection();
 }
+
+defineExpose({ onCleared });
 
 function onPlay() { store.playToken += 1; }
 function onPause() { store.pauseToken += 1; }

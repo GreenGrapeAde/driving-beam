@@ -3,9 +3,16 @@
 @tailwind utilities;
 
 /* Global */
-html, body { height: 100%; margin: 0; background: #ebecef; color: #0f172a; }
-#app { height: 100%; }
-.app-shell { min-height: 100vh; }
+html, body { height: 100%; margin: 0; background: #ebecef; color: #0f172a; overflow: hidden; }
+#app { height: 100%;}
+
+.app-shell {
+  display: flex;
+  flex-direction: row;
+  height: 100vh;
+  width: 100vw;        /* ← 핵심: 뷰포트 전체 너비 명시 */
+  overflow: hidden;
+}
 
 /* Left Toolbar */
 .toolbar {
@@ -48,10 +55,22 @@ html, body { height: 100%; margin: 0; background: #ebecef; color: #0f172a; }
 
 /* Main content */
 .content {
-  margin-left: 220px;
-  padding: 24px 28px;
-  min-height: 100vh;
-  box-sizing: border-box;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow-y: auto;
+  overflow: hidden;
+  padding: 0;
+}
+
+.content-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: scroll;
+  overflow-x: hidden;
+  padding: 20px 28px 28px;    /* ← 위 padding 살짝 줄이기 */
 }
 
 /* Reusable surfaces, class panel에 쓰임 */
@@ -157,7 +176,8 @@ html, body { height: 100%; margin: 0; background: #ebecef; color: #0f172a; }
 
 /* Optional: only content that should avoid chat can add this class */
 .chat-safe {
-  padding-right: 70px;
+  padding-right: 0;          /* ← 기존 70px 제거 */
+  max-width: calc(100% - 70px);  /* 필요하면 유지, 아니면 삭제 */
 }
 
 /* 지표 디자인을 위한 css */

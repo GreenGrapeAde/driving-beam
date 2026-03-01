@@ -530,7 +530,7 @@ def _convert_roi(roi, frame_w, frame_h, disp_w, disp_h):
 
 
 # =========================
-# Manual - ROI ì¶”ì¶œ ?”ì²­ API (preview ?ì„±)
+# Manual - ROI 추출하기
 # =========================
 @router.post("/manual/extract")
 async def manual_extract(request: Request, payload: dict):
@@ -644,7 +644,7 @@ async def manual_extract(request: Request, payload: dict):
 
 
 # =========================
-# Manual - preview ê°€?¸ì˜¤ê¸?
+# Manual - 미리보기
 # =========================
 @router.get("/manual/preview")
 async def manual_preview(request: Request, index: int):
@@ -665,7 +665,7 @@ async def manual_preview(request: Request, index: int):
 
 
 # =========================
-# Manual - ?€??(BMP)
+# Manual - 저장하기
 # =========================
 @router.post("/manual/save")
 async def manual_save(request: Request):
