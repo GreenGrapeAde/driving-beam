@@ -2,21 +2,21 @@
   <aside class="sidebar">
     <!-- Logo / Brand -->
     <div class="sidebar-brand">
-      <div class="brand-icon">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-          <circle cx="12" cy="12" r="3" />
-          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z" />
-          <path d="M12 6v2M12 16v2M6 12H4M20 12h-2" />
-        </svg>
-      </div>
-      <span class="brand-label">Hard-case Crop Tool</span>
+      <img 
+        src="@/assets/SL_full_logo.svg" 
+        alt="SL Corporation" 
+        class="brand-logo"
+        @click="$emit('reset')"
+        style="cursor: pointer;"
+      />
     </div>
+
 
     <!-- Divider -->
     <div class="sidebar-divider" />
 
     <!-- Section Label -->
-    <p class="sidebar-section-label">VIEW MODE</p>
+    <p class="sidebar-section-label">Menu</p>
 
     <!-- Nav Items -->
     <nav class="sidebar-nav">
@@ -73,22 +73,46 @@
     <!-- Bottom status -->
     <div class="sidebar-footer">
       <div class="status-row">
-        <span class="status-dot active" />
-        <span class="status-text">System Online</span>
+        <span class="status-dot" :class="serverOnline ? 'active' : 'inactive'" />
+        <span class="status-text">{{ serverOnline ? 'SERVER ONLINE' : 'SERVER OFFLINE' }}</span>
       </div>
       <div class="status-row">
         <span class="status-dot" />
-        <span class="status-text">4 Cameras Active</span>
+        <span class="status-text">Camera Inactive</span>
       </div>
     </div>
   </aside>
 </template>
 
 <script setup>
+
+import { onBeforeUnmount, onMounted, ref } from "vue";
+
+const serverOnline = ref(false);
+let pingInterval = null;
+
+async function checkServer() {
+  try {
+    const res = await fetch("http://localhost:8000/health", { signal: AbortSignal.timeout(2000) });
+    serverOnline.value = res.ok;
+  } catch {
+    serverOnline.value = false;
+  }
+}
+
+onMounted(() => {
+  checkServer();
+  pingInterval = setInterval(checkServer, 5000); // 5초마다 확인
+});
+
+onBeforeUnmount(() => {
+  clearInterval(pingInterval);
+});
+
 defineProps({
   mode: { type: String, required: true },
 });
-defineEmits(["update:mode"]);
+defineEmits(["update:mode", "reset"]);
 </script>
 
 <style scoped>
@@ -97,7 +121,7 @@ defineEmits(["update:mode"]);
 .sidebar {
   width: 220px;
   height: 100vh;
-  background: #0a0d14;
+  background: #3377aece;
   border-right: 1px solid rgba(255, 255, 255, 0.06);
   display: flex;
   flex-direction: column;
@@ -152,17 +176,10 @@ defineEmits(["update:mode"]);
   flex-shrink: 0;
 }
 
-.brand-icon svg {
-  width: 18px;
-  height: 18px;
-}
-
-.brand-label {
-  font-size: 15px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  color: #e8edf5;
-  text-transform: uppercase;
+.brand-logo {
+  width: 180px;   /* 아이콘 32px + gap 10px + 텍스트 너비 합산 */
+  height: auto;
+  object-fit: contain;
 }
 
 /* ── Divider ──────────────────────── */
@@ -335,6 +352,10 @@ defineEmits(["update:mode"]);
 .status-dot.active {
   background: #00e676;
   box-shadow: 0 0 6px #00e67688;
+}
+
+.status-dot.inactive {
+  background: #ef4444; /* 빨간색 */
 }
 
 .status-text {

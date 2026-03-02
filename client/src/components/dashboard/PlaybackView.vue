@@ -141,6 +141,8 @@
         </div>
       </div>
     </div>
+
+    <MetricsTable />
   </section>
 </template>
 
@@ -148,6 +150,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import UploadOnceBar from "../sub/UploadOnceBar.vue";
 import { usePlaybackCropStore } from "@/playbackCrop";
+import MetricsTable from "../sub/MetricsTable.vue";
 
 const store = usePlaybackCropStore();
 

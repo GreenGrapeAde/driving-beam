@@ -6,7 +6,7 @@
         <span class="eyebrow-line" />
         <span class="eyebrow-text">Image Auto / Manual Crop Tool</span>
       </div>
-      <h1 class="header-title">Hard-case Crop Tool</h1>
+      <h1 class="header-title">Dashboard</h1>
     </div>
 
     <!-- Right: Mode badge + time -->

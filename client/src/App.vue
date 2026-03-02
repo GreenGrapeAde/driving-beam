@@ -1,6 +1,6 @@
 ﻿<template>
   <div class="app-shell">
-    <Sidebar :mode="mode" @update:mode="mode = $event" />
+    <Sidebar :mode="mode" @update:mode="mode = $event" @reset=reload />
 
   <main class="content">
     <div class="content-body">         <!-- 이 안에서만 스크롤 -->
@@ -21,7 +21,7 @@
         <div class="chat-panel__header">
           <div>
             <div class="chat-title">Assistant</div>
-            <div class="chat-subtitle">Adaptive beam tester chat</div>
+            <div class="chat-subtitle">How can I help you?</div>
           </div>
           <span class="chat-status">∙ online</span>
         </div>
@@ -49,6 +49,10 @@ const chatOpen = ref(false);
 
 function toggleChat() {
   chatOpen.value = !chatOpen.value;
+}
+
+function reload() {
+  window.location.reload();
 }
 
 const manualCropRef = ref(null);

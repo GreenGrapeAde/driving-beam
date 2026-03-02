@@ -39,3 +39,6 @@ server/videos/
 __pycache__/
 *.pyc
 
+# Archives
+*.zip
+

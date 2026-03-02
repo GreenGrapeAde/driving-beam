@@ -173,7 +173,7 @@ def get_state(request_or_ws) -> AppState:
 
 
 # =========================
-# Amodal crop 헬퍼
+# Playback crop 헬퍼
 # =========================
 def _ensure_dirs(root):
     for s in ["train", "valid", "test"]:
@@ -210,7 +210,7 @@ def _bbox_to_yolo(ox1, oy1, ox2, oy2, cx1, cy1, cw, ch):
 def _crop_and_save(frame, det, frame_w, frame_h, target_line,
                    ds_root, img_idx) -> bool:
     """
-    det 하나를 amodal 크롭하여 저장.
+    det 하나를 amodal(가려진 부분까지 포함한 전체 객체) 크롭하여 저장.
     성공하면 True, 건너뛰면 False 반환.
     """
     occ_cls = _coco_to_occ(det.get("cls"))
@@ -705,3 +705,10 @@ async def manual_save(request: Request):
 
     cap.release()
     return {"ok": True, "savedCount": saved, "dir": st.manual.last_save_dir}
+
+# ============================================================================
+# 서버 상태 ping으로 받기
+# ============================================================================
+@router.get("/health")
+async def health():
+    return {"ok": True}
