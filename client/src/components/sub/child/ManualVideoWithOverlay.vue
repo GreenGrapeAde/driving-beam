@@ -90,7 +90,7 @@
       </div>
 
       <span v-if="videoSrc">{{ isPlaying ? "Playing" : "Paused" }}</span>
-      <span v-else>Overlay: ROI -> canvas draw</span>
+      <span v-else></span>
     </div>
   </div>
 </template>

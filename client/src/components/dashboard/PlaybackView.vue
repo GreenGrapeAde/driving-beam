@@ -67,7 +67,22 @@
             @pause="onPause"
           />
           <div v-else class="video-placeholder">
-            <div class="text-xs text-slate-500 mt-1">No video yet. Upload one.</div>
+            <!-- 좌측 텍스트 -->
+            <div class="ph-left">
+              <div class="ph-title">동영상 분석 및<br>데이터셋 추출</div>
+              <div class="ph-desc">
+                동영상을 업로드 후 원하는 영역을<br>드래그하여 데이터셋을 저장합니다.
+              </div>
+            </div>
+            <!-- 우측 아이콘 -->
+            <div class="ph-right">
+              <svg width="140" height="168" viewBox="0 0 54 64" fill="none">
+                <rect x="2" y="2" width="42" height="54" rx="5" fill="#dbeafe" stroke="#93c5fd" stroke-width="2"/>
+                <path d="M30 2 L44 16 L30 16 Z" fill="#93c5fd"/>
+                <circle cx="39" cy="49" r="13" fill="#2563eb"/>
+                <polygon points="35,44 35,54 47,49" fill="white"/>
+              </svg>
+            </div>
           </div>
 
           <canvas ref="canvasEl" class="overlay-canvas"></canvas>
@@ -442,11 +457,41 @@ onBeforeUnmount(() => {
   object-fit: contain; z-index: 1;
 }
 .video-placeholder {
-  position: absolute; inset: 0;
-  display: grid; place-items: center; text-align: center;
-  background: radial-gradient(circle at 30% 20%, rgba(255,255,255,0.08), transparent 55%),
-              radial-gradient(circle at 70% 80%, rgba(255,255,255,0.06), transparent 55%);
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;  /* ← space-between → center */
+  gap: 80px;                /* ← 두 요소 사이 간격 */
+  background: #f8fafc;
+  /* padding 제거 */
 }
+
+.ph-left {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 320px;         /* ← 텍스트 너비 제한 */
+}
+
+.ph-title {
+  font-size: 38px;
+  font-weight: 700;
+  color: #0f172a;
+  line-height: 1.3;
+}
+
+.ph-desc {
+  font-size: 16px;
+  color: #64748b;
+  line-height: 1.8;
+}
+
+.ph-right {
+  flex-shrink: 0;
+  opacity: 0.9;
+}
+
 .overlay-canvas {
   position: absolute; inset: 0;
   width: 100%; height: 100%;
