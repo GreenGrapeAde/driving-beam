@@ -715,60 +715,84 @@ async def health():
 
 
 # =========================
-# 6) Live + AI 추론 WebSocket
+# 5) Live WebRTC (GoPro) 추가
 # =========================
-@router.websocket("/ws/live_ai")
-async def live_ai(ws: WebSocket):
-    await ws.accept()
-    st = get_state(ws)
+import uuid
+from aiortc import RTCPeerConnection, RTCSessionDescription, MediaStreamTrack, VideoStreamTrack
+from aiortc.contrib.media import MediaBlackhole
+from fastapi import Body
+from fastapi.responses import JSONResponse
+from fastapi.encoders import jsonable_encoder
+import asyncio
+import cv2
+from av import VideoFrame
 
-    gopro_idx = int(os.getenv("GOPRO_DEVICE_INDEX", 0))
-    cap = cv2.VideoCapture(gopro_idx, cv2.CAP_DSHOW)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-    fps_src = cap.get(cv2.CAP_PROP_FPS) or 30.0
+live_pcs = {}  # PeerConnection 관리
 
-    try:
-        while True:
-            # 클라이언트 cancel 확인
-            try:
-                msg = await asyncio.wait_for(ws.receive_text(), timeout=0.001)
-                ctrl = json.loads(msg)
-                if ctrl.get("type") == "control" and ctrl.get("action") == "cancel":
-                    await ws.send_text(json.dumps({"type": "cancelled"}))
-                    break
-            except asyncio.TimeoutError:
-                pass
-            except WebSocketDisconnect:
-                break
+class GoProVideoTrack(VideoStreamTrack):
+    """
+    GoPro 캡처보드 + AI inference → VideoStreamTrack
+    """
+    def __init__(self, model_mgr, cap_index=0):
+        super().__init__()
+        self.cap = cv2.VideoCapture(cap_index, cv2.CAP_DSHOW)
+        self.model_mgr = model_mgr
 
-            ret, frame = cap.read()
-            if not ret:
-                await asyncio.sleep(0.01)
-                continue
+    async def recv(self):
+        pts, time_base = await self.next_timestamp()
 
-            # ── AI 추론
-            dets = st.model_mgr.run_ai_inference(frame)
+        ret, frame = self.cap.read()
+        if not ret:
+            await asyncio.sleep(0.01)
+            return await self.recv()
 
-            # ── OpenCV → JPEG → base64
-            ok, buffer = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
-            if not ok:
-                continue
-            jpg_b64 = base64.b64encode(buffer).decode()
+        # ── AI inference
+        dets = self.model_mgr.run_ai_inference(frame)
 
-            # ── WebSocket 전송
-            await ws.send_text(json.dumps({
-                "type": "frame",
-                "frameBase64": jpg_b64,
-                "fps": fps_src,
-                "detections": dets,  # [{"x1":..., "y1":..., "x2":..., "y2":..., "cls":"car","conf":0.78}, ...]
-            }))
+        # ── Overlay
+        for det in dets:
+            cv2.rectangle(frame, (det["x1"], det["y1"]), (det["x2"], det["y2"]), (0,0,255), 2)
+            cv2.putText(frame, det["cls"], (det["x1"], det["y1"]-5),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,0,255), 1)
 
-            await asyncio.sleep(0)  # event loop yield
+        video_frame = VideoFrame.from_ndarray(frame, format="bgr24")
+        video_frame.pts = pts
+        video_frame.time_base = time_base
+        return video_frame
 
-    except WebSocketDisconnect:
-        pass
-    finally:
-        cap.release()
-        try: await ws.close()
-        except: pass
+@router.post("/live/webrtc")
+async def live_webrtc(request: Request, payload: dict = Body(...)):
+    """
+    SDP offer → WebRTC PeerConnection → SDP answer 반환
+    """
+    st = get_state(request)
+    offer_sdp = payload.get("sdp")
+    if not offer_sdp:
+        return JSONResponse({"error": "SDP offer required"}, status_code=400)
+
+    pc = RTCPeerConnection()
+    pc_id = str(uuid.uuid4())
+    live_pcs[pc_id] = pc
+
+    # GoPro track 추가
+    video_track = GoProVideoTrack(st.model_mgr, cap_index=0)
+    pc.addTrack(video_track)
+
+    # DataChannel (AI 좌표)
+    dc = pc.createDataChannel("detections")
+    # 필요시 서버에서 좌표 push 가능
+    # 예: dc.send(json.dumps(dets))
+
+    @pc.on("connectionstatechange")
+    async def on_conn_state_change():
+        if pc.connectionState == "failed" or pc.connectionState == "closed":
+            await pc.close()
+            live_pcs.pop(pc_id, None)
+
+    # SDP 처리
+    offer = RTCSessionDescription(sdp=offer_sdp, type="offer")
+    await pc.setRemoteDescription(offer)
+    answer = await pc.createAnswer()
+    await pc.setLocalDescription(answer)
+
+    return JSONResponse({"sdp": pc.localDescription.sdp})
