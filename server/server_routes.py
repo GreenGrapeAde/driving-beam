@@ -712,3 +712,63 @@ async def manual_save(request: Request):
 @router.get("/health")
 async def health():
     return {"ok": True}
+
+
+# =========================
+# 6) Live + AI 추론 WebSocket
+# =========================
+@router.websocket("/ws/live_ai")
+async def live_ai(ws: WebSocket):
+    await ws.accept()
+    st = get_state(ws)
+
+    gopro_idx = int(os.getenv("GOPRO_DEVICE_INDEX", 0))
+    cap = cv2.VideoCapture(gopro_idx, cv2.CAP_DSHOW)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+    fps_src = cap.get(cv2.CAP_PROP_FPS) or 30.0
+
+    try:
+        while True:
+            # 클라이언트 cancel 확인
+            try:
+                msg = await asyncio.wait_for(ws.receive_text(), timeout=0.001)
+                ctrl = json.loads(msg)
+                if ctrl.get("type") == "control" and ctrl.get("action") == "cancel":
+                    await ws.send_text(json.dumps({"type": "cancelled"}))
+                    break
+            except asyncio.TimeoutError:
+                pass
+            except WebSocketDisconnect:
+                break
+
+            ret, frame = cap.read()
+            if not ret:
+                await asyncio.sleep(0.01)
+                continue
+
+            # ── AI 추론
+            dets = st.model_mgr.run_ai_inference(frame)
+
+            # ── OpenCV → JPEG → base64
+            ok, buffer = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+            if not ok:
+                continue
+            jpg_b64 = base64.b64encode(buffer).decode()
+
+            # ── WebSocket 전송
+            await ws.send_text(json.dumps({
+                "type": "frame",
+                "frameBase64": jpg_b64,
+                "fps": fps_src,
+                "detections": dets,  # [{"x1":..., "y1":..., "x2":..., "y2":..., "cls":"car","conf":0.78}, ...]
+            }))
+
+            await asyncio.sleep(0)  # event loop yield
+
+    except WebSocketDisconnect:
+        pass
+    finally:
+        cap.release()
+        try: await ws.close()
+        except: pass
