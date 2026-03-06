@@ -178,6 +178,7 @@ def get_state(request_or_ws) -> AppState:
 def _ensure_dirs(root):
     for s in ["train", "valid", "test"]:
         os.makedirs(os.path.join(root, s, "images"), exist_ok=True)
+        os.makedirs(os.path.join(root, s, "images_full"), exist_ok=True)
         os.makedirs(os.path.join(root, s, "labels"), exist_ok=True)
 
 def _write_dataset_yaml(root):
@@ -240,10 +241,13 @@ def _crop_and_save(frame, det, frame_w, frame_h, target_line,
     split = _pick_split(img_idx)
     stem  = f"sample_{img_idx:06d}"
     img_p = os.path.join(ds_root, split, "images", f"{stem}.jpg")
+    img_full_p = os.path.join(ds_root, split, "images_full", f"{stem}.jpg")
     lbl_p = os.path.join(ds_root, split, "labels", f"{stem}.txt")
 
     if not cv2.imwrite(img_p, crop):
         return False
+
+    cv2.imwrite(img_full_p, frame)  # 원본 이미지 저장
 
     yolo = _bbox_to_yolo(ox1, oy1, ox2, oy2, cx1, cy1, cx2-cx1, cy2-cy1)
     if yolo is None:
@@ -714,85 +718,47 @@ async def health():
     return {"ok": True}
 
 
-# =========================
-# 5) Live WebRTC (GoPro) 추가
-# =========================
-import uuid
-from aiortc import RTCPeerConnection, RTCSessionDescription, MediaStreamTrack, VideoStreamTrack
-from aiortc.contrib.media import MediaBlackhole
-from fastapi import Body
-from fastapi.responses import JSONResponse
-from fastapi.encoders import jsonable_encoder
-import asyncio
-import cv2
-from av import VideoFrame
+# ════════════════════════════════════════════════════════════════
+# 15. Live MJPEG (GoPro)
+# ════════════════════════════════════════════════════════════════
+from fastapi.responses import StreamingResponse
 
-live_pcs = {}  # PeerConnection 관리
+async def _mjpeg_generator(model_mgr, cap_index: int = 1):
+    cap = cv2.VideoCapture(cap_index, cv2.CAP_DSHOW)
+    try:
+        while True:
+            ret, frame = cap.read()
+            if not ret or frame is None:
+                await asyncio.sleep(0.01)
+                continue
 
-class GoProVideoTrack(VideoStreamTrack):
-    """
-    GoPro 캡처보드 + AI inference → VideoStreamTrack
-    """
-    def __init__(self, model_mgr, cap_index=0):
-        super().__init__()
-        self.cap = cv2.VideoCapture(cap_index, cv2.CAP_DSHOW)
-        self.model_mgr = model_mgr
+            # AI 추론 + 오버레이
+            dets = model_mgr.run_ai_inference(frame)
+            for d in dets:
+                cv2.rectangle(frame, (d["x1"], d["y1"]), (d["x2"], d["y2"]), (0, 0, 255), 2)
+                cv2.putText(frame, d["cls"], (d["x1"], d["y1"] - 5),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
 
-    async def recv(self):
-        pts, time_base = await self.next_timestamp()
+            ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            if not ok:
+                continue
 
-        ret, frame = self.cap.read()
-        if not ret:
-            await asyncio.sleep(0.01)
-            return await self.recv()
+            yield (
+                b"--frame\r\n"
+                b"Content-Type: image/jpeg\r\n\r\n" +
+                buf.tobytes() +
+                b"\r\n"
+            )
 
-        # ── AI inference
-        dets = self.model_mgr.run_ai_inference(frame)
+            await asyncio.sleep(1 / 30)  # 30fps
+    finally:
+        cap.release()
 
-        # ── Overlay
-        for det in dets:
-            cv2.rectangle(frame, (det["x1"], det["y1"]), (det["x2"], det["y2"]), (0,0,255), 2)
-            cv2.putText(frame, det["cls"], (det["x1"], det["y1"]-5),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,0,255), 1)
 
-        video_frame = VideoFrame.from_ndarray(frame, format="bgr24")
-        video_frame.pts = pts
-        video_frame.time_base = time_base
-        return video_frame
-
-@router.post("/live/webrtc")
-async def live_webrtc(request: Request, payload: dict = Body(...)):
-    """
-    SDP offer → WebRTC PeerConnection → SDP answer 반환
-    """
+@router.get("/live/mjpeg")
+async def live_mjpeg(request: Request):
     st = get_state(request)
-    offer_sdp = payload.get("sdp")
-    if not offer_sdp:
-        return JSONResponse({"error": "SDP offer required"}, status_code=400)
-
-    pc = RTCPeerConnection()
-    pc_id = str(uuid.uuid4())
-    live_pcs[pc_id] = pc
-
-    # GoPro track 추가
-    video_track = GoProVideoTrack(st.model_mgr, cap_index=0)
-    pc.addTrack(video_track)
-
-    # DataChannel (AI 좌표)
-    dc = pc.createDataChannel("detections")
-    # 필요시 서버에서 좌표 push 가능
-    # 예: dc.send(json.dumps(dets))
-
-    @pc.on("connectionstatechange")
-    async def on_conn_state_change():
-        if pc.connectionState == "failed" or pc.connectionState == "closed":
-            await pc.close()
-            live_pcs.pop(pc_id, None)
-
-    # SDP 처리
-    offer = RTCSessionDescription(sdp=offer_sdp, type="offer")
-    await pc.setRemoteDescription(offer)
-    answer = await pc.createAnswer()
-    await pc.setLocalDescription(answer)
-
-    return JSONResponse({"sdp": pc.localDescription.sdp})
+    return StreamingResponse(
+        _mjpeg_generator(st.model_mgr, cap_index=1),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+    )
