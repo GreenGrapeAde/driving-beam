@@ -162,6 +162,8 @@
       :is-analyzing="store.isAnalyzing"
       :analyze-written="store.analyzeWritten"
       :analyze-phase="store.analyzePhase"
+      :clear-token="clearToken"
+      :written-counts="store.writtenCounts"
     />
   </section>
 </template>
@@ -197,6 +199,8 @@ const lastDets    = ref([]);
 let rafId      = null;
 let ro         = null;
 let lastDrawTs = 0;
+
+const clearToken = ref(0);
 
 // ── computed ──────────────────────────────────────────────────
 const canPlay = computed(() =>
@@ -240,7 +244,7 @@ async function onUploaded(payload) {
     await store.uploadVideo(payload.file);
     uiState.value = "ANALYZING";
     // 추론 + 크롭 동시 + 완료 시 자동 다운로드
-    await store.analyzeVideo(store.filename, 10, 0.4);
+    await store.analyzeVideo(store.filename, 3, 0.4);
     uiState.value = "READY";
     needsRedraw.value = true;
   } catch (e) {
@@ -251,6 +255,7 @@ async function onUploaded(payload) {
 }
 
 function onCleared() {
+  clearToken.value += 1;
   store.cancelAnalyze();
   store.reset();
   duration.value    = 0;

@@ -26,6 +26,11 @@ export const usePlaybackCropStore = defineStore("playbackCrop", {
     // playback 오버레이용 det 캐시
     detList:  [],    // [{frame_index, t_ms, detections}]
     metaInfo: null,  // {fps_src, frame_w, frame_h, infer_stride}
+
+    // 로그 reset용
+    recentCrops: [],
+    // class 출력용
+    writtenCounts: {},
   }),
 
   actions: {
@@ -149,6 +154,7 @@ export const usePlaybackCropStore = defineStore("playbackCrop", {
             this.analyzePhase    = "done";
             this.analyzeWritten  = msg.written ?? this.analyzeWritten;
             this._analyzeWs      = null;
+            this.writtenCounts    = msg.written_counts ?? {};
 
             // det/all 로드 (playback 오버레이용)
             try {
@@ -253,6 +259,11 @@ export const usePlaybackCropStore = defineStore("playbackCrop", {
       this.analyzeError    = "";
       this.detList         = [];
       this.metaInfo        = null;
+
+      // 로그 reset용
+      this.recentCrops = [];
+      // class 출력용
+      this.writtenCounts = {};
     },
   },
 });

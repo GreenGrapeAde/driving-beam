@@ -4,8 +4,8 @@
     <!-- 왼쪽: 실시간 크롭 미리보기 -->
     <div>
       <div class="flex items-center justify-between mb-3">
-        <h3 class="text-base font-bold">실시간 미리보기</h3>
-        <div class="text-xs text-slate-500">최근 추출 이미지</div>
+        <h3 class="text-base font-bold">미리보기</h3>
+        <div class="text-xs text-slate-500">최근 추출 이미지 (12장)</div>
       </div>
       <div class="bg-slate-100 rounded-xl border border-slate-200 p-3 h-[300px] overflow-y-auto">
         <div v-if="recentCrops.length === 0" class="h-full flex items-center justify-center text-sm text-slate-400">
@@ -40,7 +40,7 @@
 
       <div class="bg-slate-100 rounded-xl border border-slate-200 h-[300px] flex flex-col">
         <!-- 로그 스크롤 영역 -->
-        <div ref="logEl" class="flex-1 overflow-y-auto p-3 font-mono text-xs space-y-0.5">
+        <div ref="logEl" class="flex-1 overflow-y-auto p-3 font-mono text-sm space-y-1">
           <div v-if="logRows.length === 0" class="text-slate-400 mt-2">
             분석 시작 후 로그가 출력됩니다
           </div>
@@ -69,6 +69,8 @@ const props = defineProps({
   isAnalyzing:   { type: Boolean, default: false },
   analyzeWritten:{ type: Number,  default: 0 },
   analyzePhase:  { type: String,  default: "" },
+  clearToken:     { type: Number,  default: 0 },
+  writtenCounts: { type: Object, default: () => ({}) },
 });
 
 const logEl   = ref(null);
@@ -86,25 +88,24 @@ const recentCrops = computed(() => {
 });
 
 // ── 클래스별 집계 ────────────────────────────────────────────
-const classCounts = computed(() => {
-  const counts = {};
-  for (const entry of props.detList) {
-    for (const det of entry.detections ?? []) {
-      counts[det.cls] = (counts[det.cls] || 0) + 1;
-    }
-  }
-  return counts;
-});
+// const classCounts = computed(() => {
+//   const counts = {};
+//   for (const entry of props.detList) {
+//     for (const det of entry.detections ?? []) {
+//       counts[det.cls] = (counts[det.cls] || 0) + 1;
+//     }
+//   }
+//   return counts;
+// });
 
 // ── 완료 요약 문장 ────────────────────────────────────────────
 const summary = computed(() => {
-  if (props.analyzePhase !== "done" && !props.analyzeWritten) return null;
+  if (props.analyzePhase !== "done") return null;
   if (props.isAnalyzing) return null;
-  const parts = Object.entries(classCounts.value)
+  const parts = Object.entries(props.writtenCounts)
     .map(([cls, n]) => `${cls}: ${n}개`);
   if (!parts.length) return null;
-  const total = Object.values(classCounts.value).reduce((a, b) => a + b, 0);
-  return parts.join(", ") + `  ·  총 ${total}개의 이미지가 추출되었습니다.`;
+  return parts.join(", ") + `  ·  총 ${props.analyzeWritten}개의 이미지가 추출되었습니다.`;
 });
 
 // ── 로그 추가 헬퍼 ───────────────────────────────────────────
@@ -126,19 +127,30 @@ let lastDetCount = 0;
 watch(() => props.detList.length, (len) => {
   if (len <= lastDetCount) return;
   const entry = props.detList[len - 1];
-  const dets  = entry?.detections ?? [];
-  if (dets.length > 0) {
-    const summary = dets.map(d => `${d.cls}(${(d.conf*100).toFixed(0)}%)`).join(", ");
-    pushLog(`프레임 ${entry.frame_index}  →  ${summary}`, "text-slate-700");
-  }
   lastDetCount = len;
+
+  const total = props.analyzeWritten;
+  if (!total || !Object.keys(props.writtenCounts).length) return;
+
+  const parts = Object.entries(props.writtenCounts)
+    .map(([cls, n]) => `${cls}: ${n}개 (${(n / total * 100).toFixed(1)}%)`)
+    .join(", ");
+  pushLog(`총 프레임 ${entry.frame_index}  →  ${parts}`, "text-slate-700");
 });
 
 // ── phase 변화 → 로그 출력 ──────────────────────────────────
 watch(() => props.analyzePhase, (phase) => {
   if (phase === "analyzing") pushLog("분석 시작", "text-sky-500");
   if (phase === "zipping")   pushLog(`추론 완료 · ZIP 생성 중 (${props.analyzeWritten}장)`, "text-amber-500");
-  if (phase === "done")      pushLog(`완료 · ${props.analyzeWritten}장 저장됨`, "text-emerald-500");
+  if (phase === "done") {
+    pushLog(`완료 · ${props.analyzeWritten}장 저장됨`, "text-emerald-500");
+  }
+});
+
+// ── 로그 reset용 ──────────────────────────────────
+watch(() => props.clearToken, () => {
+  logRows.value    = [];
+  lastDetCount     = 0;
 });
 
 // ── 유틸 ────────────────────────────────────────────────────

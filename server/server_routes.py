@@ -342,6 +342,7 @@ async def analyze_video(ws: WebSocket):
         _write_dataset_yaml(ds_root)
 
         det_map     = {}   # playback 오버레이용 캐시
+        meta_samples = []   # metadata 저장용 list
         frame_count = 0
         infer_count = 0
         img_idx     = 0    # 저장된 이미지 인덱스
@@ -377,6 +378,7 @@ async def analyze_video(ws: WebSocket):
             # playback 오버레이용 캐시 저장
             det_map[frame_count] = {"t_ms": t_ms, "detections": dets}
 
+            
             # ── 추론 결과로 즉시 크롭 저장 ────────────────
             for det in dets:
                 ok = _crop_and_save(
@@ -384,6 +386,14 @@ async def analyze_video(ws: WebSocket):
                     ds_root, img_idx,
                 )
                 if ok:
+                    split = _pick_split(img_idx)
+                    meta_samples.append({
+                        "id":            f"sample_{img_idx:06d}",
+                        "split":         split,
+                        "timestamp_sec": round(t_ms / 1000, 2),
+                        "frame_index":   frame_count,
+                        "class_name":    det.get("cls", ""),
+                    })
                     img_idx += 1
                     written += 1
 
@@ -422,6 +432,9 @@ async def analyze_video(ws: WebSocket):
             "splits":       "train:valid:test=8:1:1",
         })
 
+        # ── metadat.json 생성 ───────────────────────────────────
+        with open(os.path.join(ds_root, "metadata.json"), "w", encoding="utf-8") as f:
+            json.dump({"samples": meta_samples}, f, indent=2, ensure_ascii=False)
         # ── ZIP 압축 ──────────────────────────────────────
         zip_name = f"{ds_name}.zip"
         zip_path = os.path.join(export_dir, zip_name)
@@ -431,6 +444,11 @@ async def analyze_video(ws: WebSocket):
                     abs_p = os.path.join(rd, fn)
                     zf.write(abs_p, os.path.relpath(abs_p, tmp_dir))
 
+        written_counts = {}
+        for s in meta_samples:
+            cls = s["class_name"]
+            written_counts[cls] = written_counts.get(cls, 0) + 1
+
         await ws.send_text(json.dumps({
             "type":         "done",
             "progress":     100,
@@ -438,6 +456,7 @@ async def analyze_video(ws: WebSocket):
             "zip_name":     zip_name,
             "download_url": f"/export_download/{zip_name}",
             "total_inferred": infer_count,
+            "written_counts": written_counts,
         }))
 
     except WebSocketDisconnect:
