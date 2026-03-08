@@ -95,7 +95,7 @@ class ModelManager:
         self.model_iou          = float(os.getenv("MODEL_IOU", "0.3"))
         self.post_nms_iou       = float(os.getenv("POST_NMS_IOU", "0.4"))
         self.max_box_area_ratio = float(os.getenv("MAX_BOX_AREA_RATIO", "0.5"))
-        _cls = os.getenv("TARGET_CLASSES", "2,5,7")
+        _cls = os.getenv("TARGET_CLASSES", "0, 2,5,7")
         self.target_classes = [int(c.strip()) for c in _cls.split(",")]
         self.device = "cuda:0" if torch.cuda.is_available() else "cpu"
         self._model = None
@@ -216,14 +216,14 @@ def _crop_and_save(frame, det, frame_w, frame_h, target_line,
     """
     occ_cls = _coco_to_occ(det.get("cls"))
     if occ_cls is None:
-        return False
+        return False, ""
 
     ox1, oy1 = int(det["x1"]), int(det["y1"])
     ox2, oy2 = int(det["x2"]), int(det["y2"])
 
     # 중심이 target_line 오른쪽이면 스킵
     if (ox1 + ox2) // 2 > target_line:
-        return False
+        return False, ""
 
     cls_name = det.get("cls", "").lower()
     box_h    = oy2 - oy1
@@ -232,11 +232,11 @@ def _crop_and_save(frame, det, frame_w, frame_h, target_line,
     cx1 = max(0, ox1);       cy1 = max(0, oy1)
     cx2 = min(frame_w, ox2); cy2 = min(frame_h, ext_y2)
     if cx2 <= cx1 or cy2 <= cy1:
-        return False
+        return False, ""
 
     crop = frame[cy1:cy2, cx1:cx2]
     if crop.size == 0:
-        return False
+        return False, ""
 
     split = _pick_split(img_idx)
     stem  = f"sample_{img_idx:06d}"
@@ -245,19 +245,22 @@ def _crop_and_save(frame, det, frame_w, frame_h, target_line,
     lbl_p = os.path.join(ds_root, split, "labels", f"{stem}.txt")
 
     if not cv2.imwrite(img_p, crop):
-        return False
+        return False, ""
 
     cv2.imwrite(img_full_p, frame)  # 원본 이미지 저장
 
     yolo = _bbox_to_yolo(ox1, oy1, ox2, oy2, cx1, cy1, cx2-cx1, cy2-cy1)
     if yolo is None:
         os.remove(img_p)
-        return False
+        return False, ""
 
     with open(lbl_p, "w") as f:
         f.write(f"{occ_cls} {yolo}\n")
 
-    return True
+    thumb = cv2.resize(crop, (160, 120), interpolation=cv2.INTER_AREA)
+    ok_t, buf_t = cv2.imencode(".jpg", thumb, [cv2.IMWRITE_JPEG_QUALITY, 60])
+    thumb_b64 = base64.b64encode(buf_t).decode() if ok_t else ""
+    return True, thumb_b64
 
 
 # =========================
@@ -343,6 +346,7 @@ async def analyze_video(ws: WebSocket):
 
         det_map     = {}   # playback 오버레이용 캐시
         meta_samples = []   # metadata 저장용 list
+        recent_thumbs = []  # 최근 thumb 저장용
         frame_count = 0
         infer_count = 0
         img_idx     = 0    # 저장된 이미지 인덱스
@@ -381,7 +385,7 @@ async def analyze_video(ws: WebSocket):
             
             # ── 추론 결과로 즉시 크롭 저장 ────────────────
             for det in dets:
-                ok = _crop_and_save(
+                ok, thumb_b64 = _crop_and_save(
                     frame, det, frame_w, frame_h, target_line,
                     ds_root, img_idx,
                 )
@@ -393,7 +397,14 @@ async def analyze_video(ws: WebSocket):
                         "timestamp_sec": round(t_ms / 1000, 2),
                         "frame_index":   frame_count,
                         "class_name":    det.get("cls", ""),
+                        # "thumb":         thumb_b64,
                     })
+
+                    if len(recent_thumbs) < 12:   # ★ 추가
+                        recent_thumbs.append({
+                            "class_name": det.get("cls", ""),
+                            "thumb":      thumb_b64,
+                        })
                     img_idx += 1
                     written += 1
 
@@ -411,6 +422,7 @@ async def analyze_video(ws: WebSocket):
                     "progress":      pct,
                     "written":       written,
                     "remaining_sec": round(eta),
+                    "recent_crops":  recent_thumbs,
                 }))
                 await asyncio.sleep(0)  # event loop yield
 
@@ -738,25 +750,134 @@ async def health():
 
 
 # ════════════════════════════════════════════════════════════════
-# 15. Live MJPEG (GoPro)
+# 15. Live (GoPro) — 백그라운드 스레드 공유 구조
 # ════════════════════════════════════════════════════════════════
 from fastapi.responses import StreamingResponse
+import threading, tempfile, zipfile
 
-async def _mjpeg_generator(model_mgr, cap_index: int = 1):
+# ── 공유 상태 ────────────────────────────────────────────────
+class LiveState:
+    def __init__(self):
+        self.annotated = None
+        self.dets      = []
+        self.frame_w   = 0
+        self.frame_h   = 0
+        self.running   = False
+        self.lock      = threading.Lock()
+        self.ds_root   = ""
+        self.tmp_dir   = ""
+        self.img_idx   = 0
+        self.written   = 0
+
+live_state     = LiveState()
+_capture_thread = None
+
+# ── 백그라운드 스레드: 캡처 + 추론 + 크롭 저장 ──────────────
+def _capture_loop(model_mgr, cap_index=1):
+    import time as _time
     cap = cv2.VideoCapture(cap_index, cv2.CAP_DSHOW)
+
+    # 워밍업
+    t0 = _time.time()
+    while _time.time() - t0 < 2.0:
+        ret, frame = cap.read()
+        if ret and frame is not None:
+            break
+
+    # 데이터셋 디렉토리 준비
+    export_dir = os.getenv("EXPORT_DIR", "exports")
+    os.makedirs(export_dir, exist_ok=True)
+    tmp_dir    = tempfile.mkdtemp(prefix="live_export_")
+    created_at = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    ds_root    = os.path.join(tmp_dir, f"live_dataset_{created_at}")
+    os.makedirs(ds_root, exist_ok=True)
+    _ensure_dirs(ds_root)
+    _write_dataset_yaml(ds_root)
+
+    with live_state.lock:
+        live_state.ds_root  = ds_root
+        live_state.tmp_dir  = tmp_dir
+        live_state.img_idx  = 0
+        live_state.written  = 0
+
+    frame_w     = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    frame_h     = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    target_line = int(frame_w * 0.4)
+
+    frame_count = 0
+    while live_state.running:
+        ret, frame = cap.read()
+        if not ret or frame is None:
+            _time.sleep(0.01)
+            continue
+        
+        frame_count += 1
+
+        if frame_count % 5 != 0:
+            with live_state.lock:
+                live_state.annotated = frame.copy()  # 박스 없이 원본만 업데이트
+            continue
+    
+        dets = model_mgr.run_ai_inference(frame)
+
+        # annotated 프레임 생성
+        annotated = frame.copy()
+        for d in dets:
+            cv2.rectangle(annotated, (d["x1"], d["y1"]), (d["x2"], d["y2"]), (0, 255, 0), 2)
+            cv2.putText(annotated, f"{d['cls']} {d['conf']:.2f}",
+                        (d["x1"], d["y1"] - 5),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+
+        # 크롭 저장
+        with live_state.lock:
+            img_idx = live_state.img_idx
+            for det in dets:
+                ok, _ = _crop_and_save(
+                    frame, det, frame_w, frame_h, target_line,
+                    live_state.ds_root, img_idx,
+                )
+                if ok:
+                    img_idx += 1
+                    live_state.written += 1
+            live_state.img_idx   = img_idx
+            live_state.annotated = annotated
+            live_state.dets      = dets
+            live_state.frame_w   = frame_w
+            live_state.frame_h   = frame_h
+
+    cap.release()
+    print("[live] capture loop stopped")
+
+
+def _start_capture(model_mgr, cap_index=1):
+    global _capture_thread
+    if _capture_thread and _capture_thread.is_alive():
+        return
+    live_state.running = True
+    _capture_thread = threading.Thread(
+        target=_capture_loop,
+        args=(model_mgr, cap_index),
+        daemon=True,
+    )
+    _capture_thread.start()
+
+def _stop_capture():
+    live_state.running = False
+
+
+# ── MJPEG 스트리밍 ───────────────────────────────────────────
+async def _mjpeg_generator(request: Request):
     try:
         while True:
-            ret, frame = cap.read()
-            if not ret or frame is None:
-                await asyncio.sleep(0.01)
-                continue
+            if await request.is_disconnected():
+                break
 
-            # AI 추론 + 오버레이
-            dets = model_mgr.run_ai_inference(frame)
-            for d in dets:
-                cv2.rectangle(frame, (d["x1"], d["y1"]), (d["x2"], d["y2"]), (0, 0, 255), 2)
-                cv2.putText(frame, d["cls"], (d["x1"], d["y1"] - 5),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+            with live_state.lock:
+                frame = live_state.annotated
+
+            if frame is None:
+                await asyncio.sleep(0.03)
+                continue
 
             ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
             if not ok:
@@ -768,16 +889,74 @@ async def _mjpeg_generator(model_mgr, cap_index: int = 1):
                 buf.tobytes() +
                 b"\r\n"
             )
-
-            await asyncio.sleep(1 / 30)  # 30fps
+            await asyncio.sleep(1 / 30)
+            
+    except asyncio.CancelledError:
+        pass  # 서버 종료 시 정상 처리
     finally:
-        cap.release()
+        _stop_capture()
+        print("[MJPEG] stopped")
 
 
 @router.get("/live/mjpeg")
 async def live_mjpeg(request: Request):
     st = get_state(request)
+    _start_capture(st.model_mgr, cap_index=1)
     return StreamingResponse(
-        _mjpeg_generator(st.model_mgr, cap_index=1),
+        _mjpeg_generator(request),
         media_type="multipart/x-mixed-replace; boundary=frame",
     )
+
+
+# ── det WebSocket ────────────────────────────────────────────
+@router.websocket("/live/ws/det")
+async def live_det_ws(ws: WebSocket):
+    await ws.accept()
+    st = get_state(ws)
+    _start_capture(st.model_mgr, cap_index=1)
+    try:
+        while True:
+            with live_state.lock:
+                dets    = live_state.dets
+                frame_w = live_state.frame_w
+                frame_h = live_state.frame_h
+
+            await ws.send_text(json.dumps({
+                "frame_w": frame_w,
+                "frame_h": frame_h,
+                "dets":    dets,
+            }))
+            await asyncio.sleep(1 / 30)
+    except WebSocketDisconnect:
+        pass
+
+
+# ── 저장 수 조회 ─────────────────────────────────────────────
+@router.get("/live/written")
+async def live_written():
+    return {"written": live_state.written}
+
+
+# ── ZIP 다운로드 ─────────────────────────────────────────────
+@router.post("/live/export")
+async def live_export():
+    with live_state.lock:
+        ds_root = live_state.ds_root
+        tmp_dir = live_state.tmp_dir
+        written = live_state.written
+
+    if not ds_root or written == 0:
+        raise HTTPException(status_code=400, detail="저장된 이미지가 없습니다.")
+
+    export_dir = os.getenv("EXPORT_DIR", "exports")
+    created_at = datetime.now().strftime("%Y%m%d_%H%M%S")
+    zip_name   = f"live_dataset_{created_at}.zip"
+    zip_path   = os.path.join(export_dir, zip_name)
+
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for rd, _, files in os.walk(ds_root):
+            for fn in files:
+                abs_p = os.path.join(rd, fn)
+                zf.write(abs_p, os.path.relpath(abs_p, tmp_dir))
+
+    return {"download_url": f"/export_download/{zip_name}", "written": written}

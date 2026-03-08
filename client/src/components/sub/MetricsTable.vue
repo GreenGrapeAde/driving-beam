@@ -13,16 +13,19 @@
         </div>
         <div v-else class="grid grid-cols-3 gap-2">
           <div v-for="(item, i) in recentCrops" :key="i"
-               class="aspect-square bg-slate-200 rounded-lg overflow-hidden flex items-center justify-center text-xs text-slate-500">
-            <!-- 실제 이미지 없이 클래스 + 인덱스 카드로 표현 -->
-            <div class="text-center px-1">
-              <div class="text-lg font-bold" :style="{ color: classColor(item.cls) }">
-                {{ clsEmoji(item.cls) }}
-              </div>
-              <div class="font-semibold text-slate-700">{{ item.cls }}</div>
-              <div class="text-slate-400">#{{ item.idx }}</div>
-              <div class="text-slate-400">{{ (item.conf * 100).toFixed(0) }}%</div>
+              class="aspect-square bg-slate-200 rounded-lg overflow-hidden relative">
+            <img
+              v-if="item.thumb"
+              :src="`data:image/jpeg;base64,${item.thumb}`"
+              class="w-full h-full object-cover"
+            />
+            <div v-else class="w-full h-full flex items-center justify-center text-xs text-slate-400">
+              {{ item.class_name }}
             </div>
+            <span class="absolute bottom-1 left-1 text-[10px] font-bold px-1 rounded"
+                  :style="{ background: classColor(item.class_name), color: '#fff' }">
+              {{ item.class_name }}
+            </span>
           </div>
         </div>
       </div>
@@ -71,21 +74,22 @@ const props = defineProps({
   analyzePhase:  { type: String,  default: "" },
   clearToken:     { type: Number,  default: 0 },
   writtenCounts: { type: Object, default: () => ({}) },
+  recentCrops: { type: Array, default: () => [] },
 });
 
 const logEl   = ref(null);
 const logRows = ref([]);
 
 // ── 최근 크롭 카드 (det 기준, 최대 12개) ────────────────────
-const recentCrops = computed(() => {
-  const all = [];
-  for (const entry of props.detList.slice(-30)) {
-    for (const det of entry.detections ?? []) {
-      all.push({ cls: det.cls, conf: det.conf, idx: all.length + 1 });
-    }
-  }
-  return all.slice(-12).reverse();
-});
+// const recentCrops = computed(() => {
+//   const all = [];
+//   for (const entry of props.detList.slice(-30)) {
+//     for (const det of entry.detections ?? []) {
+//       all.push({ cls: det.cls, conf: det.conf, idx: all.length + 1 });
+//     }
+//   }
+//   return all.slice(-12).reverse();
+// });
 
 // ── 클래스별 집계 ────────────────────────────────────────────
 // const classCounts = computed(() => {
@@ -156,9 +160,5 @@ watch(() => props.clearToken, () => {
 // ── 유틸 ────────────────────────────────────────────────────
 function classColor(cls) {
   return { car: "#3b82f6", bus: "#f59e0b", truck: "#10b981" }[cls] ?? "#94a3b8";
-}
-
-function clsEmoji(cls) {
-  return { car: "🚗", bus: "🚌", truck: "🚛" }[cls] ?? "🚙";
 }
 </script>

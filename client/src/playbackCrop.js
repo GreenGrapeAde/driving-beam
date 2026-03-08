@@ -31,6 +31,8 @@ export const usePlaybackCropStore = defineStore("playbackCrop", {
     recentCrops: [],
     // class 출력용
     writtenCounts: {},
+    // thumb 출력용
+    recentCrops: [],
   }),
 
   actions: {
@@ -133,10 +135,15 @@ export const usePlaybackCropStore = defineStore("playbackCrop", {
 
           // ── progress ──────────────────────────────────
           if (msg.type === "progress") {
+            //
+            console.log("recent_crops:", msg.recent_crops?.length, msg.recent_crops?.[0]?.thumb?.slice(0, 30));
+
+            
             this.analyzeProgress = msg.progress;
             this.analyzeEta      = msg.remaining_sec ?? 0;
             this.analyzeWritten  = msg.written       ?? this.analyzeWritten;
             this.analyzePhase    = "analyzing";
+            if (msg.recent_crops?.length) this.recentCrops = msg.recent_crops;
             return;
           }
 
@@ -264,6 +271,8 @@ export const usePlaybackCropStore = defineStore("playbackCrop", {
       this.recentCrops = [];
       // class 출력용
       this.writtenCounts = {};
+      // thumb 출력용
+      this.recentCrops = [];
     },
   },
 });

@@ -164,6 +164,7 @@
       :analyze-phase="store.analyzePhase"
       :clear-token="clearToken"
       :written-counts="store.writtenCounts"
+      :recent-crops="store.recentCrops"
     />
   </section>
 </template>
@@ -244,7 +245,7 @@ async function onUploaded(payload) {
     await store.uploadVideo(payload.file);
     uiState.value = "ANALYZING";
     // 추론 + 크롭 동시 + 완료 시 자동 다운로드
-    await store.analyzeVideo(store.filename, 3, 0.4);
+    await store.analyzeVideo(store.filename, 10, 0.4);
     uiState.value = "READY";
     needsRedraw.value = true;
   } catch (e) {
