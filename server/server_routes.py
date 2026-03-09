@@ -95,7 +95,7 @@ class ModelManager:
         self.model_iou          = float(os.getenv("MODEL_IOU", "0.3"))
         self.post_nms_iou       = float(os.getenv("POST_NMS_IOU", "0.4"))
         self.max_box_area_ratio = float(os.getenv("MAX_BOX_AREA_RATIO", "0.5"))
-        _cls = os.getenv("TARGET_CLASSES", "0, 2,5,7")
+        _cls = os.getenv("TARGET_CLASSES", "2,5,7")
         self.target_classes = [int(c.strip()) for c in _cls.split(",")]
         self.device = "cuda:0" if torch.cuda.is_available() else "cpu"
         self._model = None
@@ -775,7 +775,8 @@ _capture_thread = None
 # ── 백그라운드 스레드: 캡처 + 추론 + 크롭 저장 ──────────────
 def _capture_loop(model_mgr, cap_index=1):
     import time as _time
-    cap = cv2.VideoCapture(cap_index, cv2.CAP_DSHOW)
+    # cap = cv2.VideoCapture(cap_index, cv2.CAP_DSHOW)
+    cap = cv2.VideoCapture(r"C:\Users\choju\Desktop\image_video\Video\야간_고속도로.mp4")
 
     # 워밍업
     t0 = _time.time()

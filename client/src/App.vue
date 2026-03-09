@@ -13,7 +13,7 @@
   </main>
 
     <!-- Chat widget layout with toggle -->
-    <div class="chat-shell">
+    <!-- <div class="chat-shell">
       <button class="chat-fab" type="button" @click="toggleChat">
         {{ chatOpen ? "×" : "Chat" }}
       </button>
@@ -32,7 +32,7 @@
           <div class="chat-input-placeholder">Type a message…</div>
         </div>
       </aside>
-    </div>
+    </div> -->
   </div>
 </template>
 

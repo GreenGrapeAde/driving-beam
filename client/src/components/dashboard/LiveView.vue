@@ -4,7 +4,7 @@
       <div class="flex items-center justify-between gap-3 mb-3">
         <div>
           <div class="text-sm text-slate-500">Live</div>
-          <div class="text-lg font-bold">GoPro 실시간 스트리밍</div>
+          <div class="text-lg font-bold">실시간 스트리밍</div>
         </div>
         <div class="flex items-center gap-3 text-xs">
           <span class="inline-flex items-center gap-1.5">
@@ -32,7 +32,7 @@
 
           <div v-else class="video-placeholder">
             <div class="ph-left">
-              <div class="ph-title">GoPro 라이브</div>
+              <div class="ph-title">실시간 데이터셋 추출</div>
               <div class="ph-desc">아래 버튼을 눌러<br>실시간 스트리밍을 시작합니다.</div>
             </div>
             <div class="ph-right">
