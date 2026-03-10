@@ -5,7 +5,7 @@
     <div>
       <div class="flex items-center justify-between mb-3">
         <h3 class="text-base font-bold">미리보기</h3>
-        <div class="text-xs text-slate-500">최근 추출 이미지 (12장)</div>
+        <div class="text-xs text-slate-500">실시간 추출 이미지 (30장)</div>
       </div>
       <div class="bg-slate-100 rounded-xl border border-slate-200 p-3 h-[300px] overflow-y-auto">
         <div v-if="recentCrops.length === 0" class="h-full flex items-center justify-center text-sm text-slate-400">
