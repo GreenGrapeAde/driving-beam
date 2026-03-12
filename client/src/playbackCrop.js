@@ -27,12 +27,12 @@ export const usePlaybackCropStore = defineStore("playbackCrop", {
     detList:  [],    // [{frame_index, t_ms, detections}]
     metaInfo: null,  // {fps_src, frame_w, frame_h, infer_stride}
 
-    // 로그 reset용
-    recentCrops: [],
     // class 출력용
     writtenCounts: {},
     // thumb 출력용
     recentCrops: [],
+    // 필터링 거친 이미지
+    filteredCrops: [],
   }),
 
   actions: {
@@ -163,6 +163,14 @@ export const usePlaybackCropStore = defineStore("playbackCrop", {
             this._analyzeWs      = null;
             this.writtenCounts    = msg.written_counts ?? {};
 
+            if (msg.removed_ids?.length) {
+              this.filteredCrops = this.recentCrops.filter(
+                c => !msg.removed_ids.includes(c.id)
+              )
+            } else {
+              this.filteredCrops = [...this.recentCrops]
+            }
+            
             // det/all 로드 (playback 오버레이용)
             try {
               await this._fetchDetAll(filename);
@@ -267,12 +275,12 @@ export const usePlaybackCropStore = defineStore("playbackCrop", {
       this.detList         = [];
       this.metaInfo        = null;
 
-      // 로그 reset용
-      this.recentCrops = [];
       // class 출력용
       this.writtenCounts = {};
       // thumb 출력용
       this.recentCrops = [];
+      // 필터링 거친 이미지
+      this.filteredCrops = [];
     },
   },
 });

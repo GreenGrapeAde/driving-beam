@@ -19,6 +19,10 @@ from fastapi.responses import FileResponse
 import torch
 from ultralytics import YOLO, RTDETR
 
+## SigLIP 관련 라이브러리
+from PIL import Image, ImageOps
+from pathlib import Path
+
 router = APIRouter()
 
 
@@ -209,6 +213,166 @@ def _bbox_to_yolo(ox1, oy1, ox2, oy2, cx1, cy1, cw, ch):
     return (f"{(rx1+rx2)/2/cw:.6f} {(ry1+ry2)/2/ch:.6f} "
             f"{(rx2-rx1)/cw:.6f} {(ry2-ry1)/ch:.6f}")
 
+## =================================================================================
+## 프레임 중복 시 버리는 함수
+## =================================================================================
+_last_saved_hists: Dict[str, np.ndarray] = {}
+
+def _is_duplicate(crop: np.ndarray, ds_root: str, threshold: float = 0.97) -> bool:
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    hist = cv2.calcHist([gray], [0], None, [64], [0, 256])
+    cv2.normalize(hist, hist)
+
+    prev = _last_saved_hists.get(ds_root)
+    if prev is not None:
+        score = cv2.compareHist(prev, hist, cv2.HISTCMP_CORREL)
+        if score >= threshold:
+            return True
+
+    _last_saved_hists[ds_root] = hist
+    return False
+
+def _clear_dedup_cache(ds_root: str):
+    _last_saved_hists.pop(ds_root, None)
+
+## =================================================================================
+## SigLIP 클래스 정의 (검증모델)
+## =================================================================================
+class AmodalVerifier:
+    ## --------------------------------------------------------------------------------------------------
+    ## 초기화
+    ## --------------------------------------------------------------------------------------------------
+    _instance = None
+    @classmethod
+    def get(cls):
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def __init__(self):
+        from transformers import AutoProcessor, AutoModel
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        print(f"[SigLIP] 모델 로드 중... ({self.device.upper()})")
+        model_id = "google/siglip-base-patch16-224"
+        self.model     = AutoModel.from_pretrained(model_id).to(self.device).eval()
+        self.processor = AutoProcessor.from_pretrained(model_id)
+        self.positive_prompts = [
+            "a 0clear photo of a car roof visible above a barrier",
+            "the top half of a truck or bus peeking over a wall",
+        ]
+        self.common_negative = [
+            "a tiny, unrecognizable pixelated blob or noise",
+            "a vehicle license plate and rear bumper",
+            "a street advertising banner or sign with text",
+            "an empty highway road with no vehicle in focus",
+            "a blurry side mirror or a single car wheel",
+        ]
+        self.night_negative = [
+            "extreme white glare and blown-out light from lamps",
+            "glowing red rear taillights or brake lights",
+            "distorted light streaks and streaky motion blur",
+        ]
+
+    ## --------------------------------------------------------------------------------------------------
+    ## 메서드
+    ## --------------------------------------------------------------------------------------------------
+    def _get_red_ratio(self, hsv_img):
+        mask = cv2.inRange(hsv_img, np.array([0, 100, 100]), np.array([10, 255, 255])) | \
+               cv2.inRange(hsv_img, np.array([160, 100, 100]), np.array([180, 255, 255]))
+        return (np.count_nonzero(mask) / (hsv_img.shape[0] * hsv_img.shape[1])) * 100
+
+    
+    @torch.no_grad()
+    def _run_vlm_batch(self, queue, is_night: bool) -> Dict:
+        paths, images = zip(*queue)
+        candidates = self.positive_prompts + self.common_negative + \
+                     (self.night_negative if is_night else [])
+        inputs = self.processor(
+            text=candidates, images=list(images),
+            padding="max_length", return_tensors="pt"
+        ).to(self.device)
+        logits = self.model(**inputs).logits_per_image
+        probs  = torch.softmax(logits, dim=1)
+        best_indices = probs.argmax(dim=1).tolist()
+        return {path: (best_idx < len(self.positive_prompts))
+                for path, best_idx in zip(paths, best_indices)}
+
+    def _remove_sample(self, img_path: Path, removed_stems: set):
+        stem  = img_path.stem
+        split = img_path.parent.parent.name
+        root  = img_path.parent.parent.parent
+        removed_stems.add(stem)
+        for sub, ext in [("images", ".jpg"), ("images_full", ".jpg"), ("labels", ".txt")]:
+            f = root / split / sub / f"{stem}{ext}"
+            if f.exists():
+                f.unlink()
+
+    def filter_dataset(self, ds_root: str, batch_size: int = 128):
+        image_paths = []
+        for split in ["train", "valid", "test"]:
+            image_paths += list(Path(ds_root, split, "images").glob("*.jpg"))
+
+        total = len(image_paths)
+        if total == 0:
+            return 0, 0, 0
+
+        removed_stems: set = set()
+        day_queue, night_queue = [], []
+
+        for img_path in image_paths:
+            arr    = np.fromfile(str(img_path), np.uint8)
+            cv_img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+            if cv_img is None:
+                self._remove_sample(img_path, removed_stems); continue
+
+            h, w     = cv_img.shape[:2]
+            gray     = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
+            is_night = np.mean(gray) < 80
+
+            # heuristic 필터
+            if h < 50 or w < 50:
+                self._remove_sample(img_path, removed_stems); continue
+            if cv2.Laplacian(gray, cv2.CV_64F).var() < 30.0:
+                self._remove_sample(img_path, removed_stems); continue
+            if (w / h) < 1.1:
+                self._remove_sample(img_path, removed_stems); continue
+            if is_night and self._get_red_ratio(
+                    cv2.cvtColor(cv_img, cv2.COLOR_BGR2HSV)) > 5.0:
+                self._remove_sample(img_path, removed_stems); continue
+
+            pil_img = Image.fromarray(cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB))
+            max_dim = max(pil_img.size)
+            padded  = ImageOps.pad(pil_img, (max_dim, max_dim), color=(127, 127, 127))
+            (night_queue if is_night else day_queue).append((img_path, padded))
+
+        # VLM 배치 추론
+        for queue, is_night in [(day_queue, False), (night_queue, True)]:
+            for i in range(0, len(queue), batch_size):
+                chunk   = queue[i:i + batch_size]
+                results = self._run_vlm_batch(chunk, is_night)
+                for path, is_pass in results.items():
+                    if not is_pass:
+                        self._remove_sample(path, removed_stems)
+
+        # metadata.json 정합성 재작성
+        meta_path = Path(ds_root) / "metadata.json"
+        if meta_path.exists():
+            with open(meta_path, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+            meta["samples"] = [
+                s for s in meta["samples"] if s["id"] not in removed_stems
+            ]
+            with open(meta_path, "w", encoding="utf-8") as f:
+                json.dump(meta, f, indent=2, ensure_ascii=False)
+
+        passed  = total - len(removed_stems)
+        removed = len(removed_stems)
+        print(f"[SigLIP] total={total} passed={passed} removed={removed}")
+        return total, passed, removed, removed_stems
+
+## =================================================================================
+## Occ 상황 crop 후 저장하는 함수
+## =================================================================================
 def _crop_and_save(frame, det, frame_w, frame_h, target_line,
                    ds_root, img_idx) -> bool:
     """
@@ -239,6 +403,9 @@ def _crop_and_save(frame, det, frame_w, frame_h, target_line,
     if crop.size == 0:
         return False, ""
 
+    if _is_duplicate(crop, ds_root):
+        return False, ""
+    
     split = _pick_split(img_idx)
     stem  = f"sample_{img_idx:06d}"
     img_p = os.path.join(ds_root, split, "images", f"{stem}.jpg")
@@ -403,6 +570,7 @@ async def analyze_video(ws: WebSocket):
 
                     if len(recent_thumbs) < 30:   # ★ 추가
                         recent_thumbs.append({
+                            "id":         f"sample_{img_idx:06d}",
                             "class_name": det.get("cls", ""),
                             "thumb":      thumb_b64,
                         })
@@ -433,22 +601,44 @@ async def analyze_video(ws: WebSocket):
         st.det_cache.size[filename]   = (frame_w, frame_h)
         st.det_cache.stride[filename] = infer_stride
 
-        # ── ZIP 생성 알림 ─────────────────────────────────
+        # ── ZIP 생성 알림
         await ws.send_text(json.dumps({"type": "zipping", "progress": 99, "written": written}))
         await asyncio.sleep(0)
 
-        # ── README 작성 ───────────────────────────────────
+        # ── SigLIP 필터링 ★
+        verifier = AmodalVerifier.get()
+        _, passed, removed, removed_ids = await asyncio.to_thread(
+            verifier.filter_dataset, ds_root, 128
+        )
+
+        # ── 필터링 후 meta_samples 정합성 ★
+        remaining_ids = {
+            p.stem
+            for split in ["train", "valid", "test"]
+            for p in Path(ds_root, split, "images").glob("*.jpg")
+        }
+        meta_samples = [s for s in meta_samples if s["id"] in remaining_ids]
+
+        # ── written_counts (필터링 후 기준) ★
+        written_counts: Dict[str, int] = {}
+        for s in meta_samples:
+            cls = s["class_name"]
+            written_counts[cls] = written_counts.get(cls, 0) + 1
+
+        # ── README 작성
         _write_readme(ds_root, {
-            "created_at":   created_at,
-            "total_images": written,
-            "left_ratio":   left_ratio,
-            "splits":       "train:valid:test=8:1:1",
+            "created_at":     created_at,
+            "total_images":   len(meta_samples),
+            "left_ratio":     left_ratio,
+            "splits":         "train:valid:test=8:1:1",
+            "siglip_removed": removed,
         })
 
-        # ── metadat.json 생성 ───────────────────────────────────
+        # ── metadata.json 작성 (필터링 후)
         with open(os.path.join(ds_root, "metadata.json"), "w", encoding="utf-8") as f:
             json.dump({"samples": meta_samples}, f, indent=2, ensure_ascii=False)
-        # ── ZIP 압축 ──────────────────────────────────────
+
+        # ── ZIP 압축
         zip_name = f"{ds_name}.zip"
         zip_path = os.path.join(export_dir, zip_name)
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -457,19 +647,17 @@ async def analyze_video(ws: WebSocket):
                     abs_p = os.path.join(rd, fn)
                     zf.write(abs_p, os.path.relpath(abs_p, tmp_dir))
 
-        written_counts = {}
-        for s in meta_samples:
-            cls = s["class_name"]
-            written_counts[cls] = written_counts.get(cls, 0) + 1
-
         await ws.send_text(json.dumps({
-            "type":         "done",
-            "progress":     100,
-            "written":      written,
-            "zip_name":     zip_name,
-            "download_url": f"/export_download/{zip_name}",
+            "type":           "done",
+            "progress":       100,
+            "written":        len(meta_samples),
+            "zip_name":       zip_name,
+            "download_url":   f"/export_download/{zip_name}",
             "total_inferred": infer_count,
             "written_counts": written_counts,
+            "siglip_passed":  passed,
+            "siglip_removed": removed,
+            "removed_ids": list(removed_ids),
         }))
 
     except WebSocketDisconnect:

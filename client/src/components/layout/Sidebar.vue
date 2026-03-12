@@ -15,11 +15,26 @@
     <!-- Divider -->
     <div class="sidebar-divider" />
 
-    <!-- Section Label -->
-    <p class="sidebar-section-label">Menu</p>
-
     <!-- Nav Items -->
     <nav class="sidebar-nav">
+
+      <!-- 자동 크롭 섹션 -->
+      <p class="sidebar-section-label">Auto Crop</p>
+
+      <button
+        class="nav-item"
+        :class="{ 'is-active': mode === 'playback' }"
+        @click="$emit('update:mode', 'playback')"
+      >
+        <span class="nav-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="5,3 19,12 5,21" fill="currentColor" stroke="none" />
+          </svg>
+        </span>
+        <span class="nav-label">Playback</span>
+        <span class="nav-arrow">›</span>
+      </button>
+
       <button
         class="nav-item"
         :class="{ 'is-active': mode === 'live' }"
@@ -40,19 +55,11 @@
         <span class="nav-arrow">›</span>
       </button>
 
-      <button
-        class="nav-item"
-        :class="{ 'is-active': mode === 'playback' }"
-        @click="$emit('update:mode', 'playback')"
-      >
-        <span class="nav-icon">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <polygon points="5,3 19,12 5,21" fill="currentColor" stroke="none" />
-          </svg>
-        </span>
-        <span class="nav-label">Playback</span>
-        <span class="nav-arrow">›</span>
-      </button>
+      <!-- 구분선 -->
+      <div class="sidebar-divider" style="margin: 12px 0;" />
+
+      <!-- 수동 크롭 섹션 -->
+      <p class="sidebar-section-label">Manual Crop</p>
 
       <button
         class="nav-item"
@@ -68,6 +75,7 @@
         <span class="nav-label">Manual</span>
         <span class="nav-arrow">›</span>
       </button>
+
     </nav>
 
     <!-- Bottom status -->

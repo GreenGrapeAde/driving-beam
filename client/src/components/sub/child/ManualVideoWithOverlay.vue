@@ -52,7 +52,9 @@
     <div class="mt-3 flex items-center flex-wrap gap-3 text-xs text-slate-600">
       <div class="flex items-center gap-2">
         <button class="ui-btn-secondary icon-btn" type="button" :disabled="!videoSrc" @click="emitPlay">
-          <span aria-label="Play">&#9658;</span>
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
+            <polygon points="2,1 13,7 2,13"/>
+          </svg>
         </button>
         <button class="ui-btn-secondary icon-btn" type="button" :disabled="!videoSrc" @click="emitPause">
           <span aria-label="Pause">&#10074;&#10074;</span>

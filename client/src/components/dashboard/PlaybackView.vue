@@ -2,7 +2,7 @@
   <section class="space-y-4 chat-safe">
     <UploadOnceBar
       :enabled="true"
-      helper="Upload video for playback"
+      helper="동영상을 업로드하세요"
       @uploaded="onUploaded"
       @cleared="onCleared"
     />
@@ -99,22 +99,22 @@
 
               <!-- 크롭 저장 수 (analyzing 중) -->
               <div v-if="store.analyzePhase === 'analyzing'" class="text-xs opacity-60">
-                <span v-if="store.analyzeWritten > 0">{{ store.analyzeWritten }}장 저장됨</span>
-                <span v-if="store.analyzeEta > 0" class="ml-2">· 잔여 약 {{ store.analyzeEta }}초</span>
+                <span v-if="store.analyzeWritten > 0">{{ store.analyzeWritten }}장의 후보</span>
+                <span v-if="store.analyzeEta > 0" class="ml-2">· 잔여 약 {{ formatEta(store.analyzeEta) }}</span>
               </div>
 
               <!-- ZIP 생성 중 메시지 -->
               <div v-if="store.analyzePhase === 'zipping'" class="text-xs opacity-60">
-                총 {{ store.analyzeWritten }}장 · ZIP 압축 중...
+                총 {{ store.analyzeWritten }}장 · SigLIP 필터링 + ZIP 생성 중...
               </div>
 
               <!-- 진행바 -->
-              <div class="mt-4 w-56 h-1.5 bg-white/20 rounded-full overflow-hidden mx-auto">
-                <div
-                  class="h-full rounded-full transition-all duration-300"
-                  :class="overlayBarColor"
-                  :style="{ width: store.analyzeProgress + '%' }"
-                />
+              <div class="mt-4 flex items-center gap-2 text-xs text-white/60">
+                <span class="text-emerald-400">✓ 추론 완료</span>
+                <span>→</span>
+                <span class="text-amber-300 animate-pulse">● SigLIP 필터링 중</span>
+                <span>→</span>
+                <span class="text-white/30">ZIP 압축</span>
               </div>
 
               <!-- 취소 버튼 (analyzing 중에만) -->
@@ -131,7 +131,9 @@
           <div class="flex items-center gap-2">
             <button class="ui-btn-secondary icon-btn" type="button"
               :disabled="!canPlay" @click="emitPlay">
-              <span>&#9658;</span>
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
+                <polygon points="2,1 13,7 2,13"/>
+              </svg>
             </button>
             <button class="ui-btn-secondary icon-btn" type="button"
               :disabled="!canPlay" @click="emitPause">
@@ -165,6 +167,7 @@
       :clear-token="clearToken"
       :written-counts="store.writtenCounts"
       :recent-crops="store.recentCrops"
+      :filtered-crops="store.filteredCrops"
     />
   </section>
 </template>
@@ -222,11 +225,16 @@ const progressBarColor = computed(() => {
   return "bg-sky-500";
 });
 
-// 오버레이 안 진행바 색상
-const overlayBarColor = computed(() => {
-  if (store.analyzePhase === "zipping") return "bg-amber-400";
-  return "bg-sky-400";
-});
+// 잔여시간 계산 함수
+function formatEta(sec) {
+  const s = Math.floor(sec || 0);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const ss = s % 60;
+  if (h > 0) return `${h}시간 ${m}분 ${ss}초`;
+  if (m > 0) return `${m}분 ${ss}초`;
+  return `${ss}초`;
+}
 
 // 상단 진행바 너비
 const progressBarWidth = computed(() => {

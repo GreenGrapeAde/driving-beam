@@ -1,27 +1,56 @@
 <template>
-  <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 items-stretch">
-
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 items-stretch">
     <!-- 왼쪽: 실시간 크롭 미리보기 -->
     <div>
       <div class="flex items-center justify-between mb-3">
-        <h3 class="text-base font-bold">미리보기</h3>
-        <div class="text-xs text-slate-500">실시간 추출 이미지 (30장)</div>
+        <h3 class="text-base font-bold">후보군</h3>
+        <div class="text-xs text-slate-500">미리보기 ({{ recentCrops.length }}장)</div>
       </div>
       <div class="bg-slate-100 rounded-xl border border-slate-200 p-3 h-[300px] overflow-y-auto">
         <div v-if="recentCrops.length === 0" class="h-full flex items-center justify-center text-sm text-slate-400">
           분석 시작 후 추출된 이미지가 표시됩니다
         </div>
         <div v-else class="grid grid-cols-3 gap-2">
-          <div v-for="(item, i) in recentCrops" :key="i"
+          <div v-for="(item, i) in recentCrops" :key="item.id ?? i"
+              class="aspect-square bg-slate-200 rounded-lg overflow-hidden relative"
+              :class="{ 'opacity-30 grayscale': isRemoved(item.id) }">
+            <img
+              v-if="item.thumb"
+              :src="`data:image/jpeg;base64,${item.thumb}`"
+              class="w-full h-full object-cover"
+            />
+            <span class="absolute bottom-1 left-1 text-[10px] font-bold px-1 rounded"
+                  :style="{ background: classColor(item.class_name), color: '#fff' }">
+              {{ item.class_name }}
+            </span>
+            <!-- 제거 표시 -->
+            <div v-if="analyzePhase === 'done' && isRemoved(item.id)"
+                class="absolute inset-0 flex items-center justify-center">
+              <span class="text-xs font-bold text-red-400">✕</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 중간: 최종 결과 -->
+    <div>
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="text-base font-bold">필터링 결과</h3>
+        <div class="text-xs text-slate-500">미리보기 ({{ recentCrops.length }}장 중 {{ filteredCrops.length }}장)</div>
+      </div>
+      <div class="bg-slate-100 rounded-xl border border-slate-200 p-3 h-[300px] overflow-y-auto">
+        <div v-if="filteredCrops.length === 0" class="h-full flex items-center justify-center text-sm text-slate-400">
+          {{ analyzePhase === 'done' ? '통과된 이미지 없음' : '분석 완료 후 표시됩니다' }}
+        </div>
+        <div v-else class="grid grid-cols-3 gap-2">
+          <div v-for="(item, i) in filteredCrops" :key="item.id ?? i"
               class="aspect-square bg-slate-200 rounded-lg overflow-hidden relative">
             <img
               v-if="item.thumb"
               :src="`data:image/jpeg;base64,${item.thumb}`"
               class="w-full h-full object-cover"
             />
-            <div v-else class="w-full h-full flex items-center justify-center text-xs text-slate-400">
-              {{ item.class_name }}
-            </div>
             <span class="absolute bottom-1 left-1 text-[10px] font-bold px-1 rounded"
                   :style="{ background: classColor(item.class_name), color: '#fff' }">
               {{ item.class_name }}
@@ -75,10 +104,22 @@ const props = defineProps({
   clearToken:     { type: Number,  default: 0 },
   writtenCounts: { type: Object, default: () => ({}) },
   recentCrops: { type: Array, default: () => [] },
+  filteredCrops: { type: Array, default: () => [] },
 });
 
 const logEl   = ref(null);
 const logRows = ref([]);
+
+const removedSet = computed(() =>
+  new Set(props.recentCrops
+    .filter(c => !props.filteredCrops.find(f => f.id === c.id))
+    .map(c => c.id)
+  )
+)
+
+function isRemoved(id) {
+  return !!id && removedSet.value.has(id)
+}
 
 // ── 최근 크롭 카드 (det 기준, 최대 12개) ────────────────────
 // const recentCrops = computed(() => {
@@ -145,7 +186,7 @@ watch(() => props.detList.length, (len) => {
 // ── phase 변화 → 로그 출력 ──────────────────────────────────
 watch(() => props.analyzePhase, (phase) => {
   if (phase === "analyzing") pushLog("분석 시작", "text-sky-500");
-  if (phase === "zipping")   pushLog(`추론 완료 · ZIP 생성 중 (${props.analyzeWritten}장)`, "text-amber-500");
+  if (phase === "zipping")   pushLog("추론 완료 · SigLIP 필터링 + ZIP 생성 중", "text-amber-500");
   if (phase === "done") {
     pushLog(`완료 · ${props.analyzeWritten}장 저장됨`, "text-emerald-500");
   }
@@ -155,6 +196,7 @@ watch(() => props.analyzePhase, (phase) => {
 watch(() => props.clearToken, () => {
   logRows.value    = [];
   lastDetCount     = 0;
+  // filteredCrops는 store에서 관리하므로 별도 처리 불필요
 });
 
 // ── 유틸 ────────────────────────────────────────────────────

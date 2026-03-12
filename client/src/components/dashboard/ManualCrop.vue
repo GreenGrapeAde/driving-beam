@@ -2,7 +2,7 @@
   <section class="space-y-4 chat-safe">
     <UploadOnceBar
       :enabled="true"
-      helper="Upload once for manual crop"
+      helper="동영상을 업로드하세요"
       @uploaded="onUploaded"
       @cleared="onCleared"
     />
