@@ -1,7 +1,7 @@
 ﻿import { defineStore } from "pinia";
 
-const API_BASE = "http://localhost:8000";
-const WS_BASE  = "ws://localhost:8000";
+const API_BASE = `http://${location.hostname}:8000`;
+const WS_BASE  = `ws://${location.hostname}:8000`;
 
 export const useLiveCropStore = defineStore("liveCrop", {
   state: () => ({
