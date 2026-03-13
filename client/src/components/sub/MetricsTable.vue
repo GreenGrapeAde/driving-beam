@@ -26,7 +26,7 @@
             <!-- 제거 표시 -->
             <div v-if="analyzePhase === 'done' && isRemoved(item.id)"
                 class="absolute inset-0 flex items-center justify-center">
-              <span class="text-xs font-bold text-red-400">✕</span>
+              <span class="text-xl font-bold text-red-400">✕</span>
             </div>
           </div>
         </div>
@@ -66,6 +66,7 @@
         <h3 class="text-base font-bold">추출 로그</h3>
         <div class="text-xs text-slate-500">
           <span v-if="isAnalyzing" class="text-sky-500">● 분석 중</span>
+          <span v-else-if="cancelToken > 0 && logRows.some(r => r.msg.includes('취소'))" class="text-red-400">취소됨</span>
           <span v-else-if="analyzePhase === 'done' || logRows.length > 0">완료</span>
         </div>
       </div>
@@ -78,7 +79,7 @@
           </div>
           <div v-for="(row, i) in logRows" :key="i"
                class="flex gap-2 text-slate-600 leading-5">
-            <span class="text-slate-400 shrink-0">{{ row.time }}</span>
+            <span class="text-slate-400 text-base shrink-0">{{ row.time }}</span>
             <span :class="row.color">{{ row.msg }}</span>
           </div>
         </div>
@@ -105,6 +106,7 @@ const props = defineProps({
   writtenCounts: { type: Object, default: () => ({}) },
   recentCrops: { type: Array, default: () => [] },
   filteredCrops: { type: Array, default: () => [] },
+  cancelToken: { type: Number, default: 0 },
 });
 
 const logEl   = ref(null);
@@ -121,27 +123,6 @@ function isRemoved(id) {
   return !!id && removedSet.value.has(id)
 }
 
-// ── 최근 크롭 카드 (det 기준, 최대 12개) ────────────────────
-// const recentCrops = computed(() => {
-//   const all = [];
-//   for (const entry of props.detList.slice(-30)) {
-//     for (const det of entry.detections ?? []) {
-//       all.push({ cls: det.cls, conf: det.conf, idx: all.length + 1 });
-//     }
-//   }
-//   return all.slice(-12).reverse();
-// });
-
-// ── 클래스별 집계 ────────────────────────────────────────────
-// const classCounts = computed(() => {
-//   const counts = {};
-//   for (const entry of props.detList) {
-//     for (const det of entry.detections ?? []) {
-//       counts[det.cls] = (counts[det.cls] || 0) + 1;
-//     }
-//   }
-//   return counts;
-// });
 
 // ── 완료 요약 문장 ────────────────────────────────────────────
 const summary = computed(() => {
@@ -180,16 +161,15 @@ watch(() => props.detList.length, (len) => {
   const parts = Object.entries(props.writtenCounts)
     .map(([cls, n]) => `${cls}: ${n}개 (${(n / total * 100).toFixed(1)}%)`)
     .join(", ");
-  pushLog(`총 프레임 ${entry.frame_index}  →  ${parts}`, "text-slate-700");
+  pushLog(`총 프레임 ${entry.frame_index}  →  ${parts}`, "text-slate-700 text-base");
 });
 
 // ── phase 변화 → 로그 출력 ──────────────────────────────────
 watch(() => props.analyzePhase, (phase) => {
-  if (phase === "analyzing") pushLog("분석 시작", "text-sky-500");
-  if (phase === "zipping")   pushLog("추론 완료 · SigLIP 필터링 + ZIP 생성 중", "text-amber-500");
-  if (phase === "done") {
-    pushLog(`완료 · ${props.analyzeWritten}장 저장됨`, "text-emerald-500");
-  }
+  if (phase === "analyzing")        pushLog("분석 시작", "text-sky-500 text-base");
+  if (phase === "siglip")           pushLog("추론 완료 · SigLIP 필터링 중", "text-black-500 text-base");
+  if (phase === "zipping_compress") pushLog("SigLIP 완료 · ZIP 압축 중", "text-black-500 text-base");
+  if (phase === "done")             pushLog(`완료 · ${props.analyzeWritten}장 저장됨`, "text-emerald-500 text-base");
 });
 
 // ── 로그 reset용 ──────────────────────────────────
@@ -203,4 +183,11 @@ watch(() => props.clearToken, () => {
 function classColor(cls) {
   return { car: "#3b82f6", bus: "#f59e0b", truck: "#10b981" }[cls] ?? "#94a3b8";
 }
+
+// ── 생성 취소 ────────────────────────────────────────────────────
+watch(() => props.cancelToken, (val) => {
+  if (val === 0) return
+  pushLog("생성 취소", "text-red-500 text-base")
+})
+
 </script>

@@ -11,7 +11,7 @@
       <div class="flex items-center justify-between gap-3 mb-3">
         <div>
           <div class="text-sm text-slate-500">Playback</div>
-          <div class="text-lg font-bold">Local video + server detections</div>
+          <div class="text-lg font-bold">Video Playback with AI Detection</div>
         </div>
         <div class="flex items-center gap-3 text-xs text-slate-500">
           <span class="font-semibold">{{ uiState }}</span>
@@ -21,9 +21,6 @@
           <span v-if="store.isAnalyzing" class="inline-flex items-center gap-1 text-sky-500">
             <span class="spinner"></span>
             {{ phaseLabel }} {{ store.analyzeProgress }}%
-            <span v-if="store.analyzeEta > 0 && store.analyzePhase === 'analyzing'">
-              (잔여 {{ store.analyzeEta }}초)
-            </span>
           </span>
           <span v-if="errorMsg" class="text-rose-600">{{ errorMsg }}</span>
         </div>
@@ -41,7 +38,7 @@
 
       <div class="card h-full flex flex-col">
         <div class="flex items-center justify-between mb-2">
-          <div class="text-sm font-semibold">Playback + Overlay</div>
+          <div class="text-sm font-semibold">Playback + Bounding Boxes</div>
           <div class="text-xs text-slate-500">
             {{ formatTime(currentTime) }} / {{ formatTime(duration) }}
             <span class="ml-2">dets: {{ lastDets.length }}</span>
@@ -88,41 +85,75 @@
           <canvas ref="canvasEl" class="overlay-canvas"></canvas>
 
           <!-- 분석 중 오버레이 (추론 + 크롭 + ZIP) -->
-          <div v-if="store.isAnalyzing" class="task-overlay">
+          <div v-if="store.isAnalyzing || cancelMsg" class="task-overlay">
             <div class="text-white text-center px-6">
 
-              <!-- 진행률 숫자 -->
-              <div class="text-3xl font-bold mb-2">{{ store.analyzeProgress }}%</div>
-
-              <!-- phase별 메시지 -->
-              <div class="text-sm opacity-90 mb-1">{{ phaseLabel }}</div>
-
-              <!-- 크롭 저장 수 (analyzing 중) -->
-              <div v-if="store.analyzePhase === 'analyzing'" class="text-xs opacity-60">
-                <span v-if="store.analyzeWritten > 0">{{ store.analyzeWritten }}장의 후보</span>
-                <span v-if="store.analyzeEta > 0" class="ml-2">· 잔여 약 {{ formatEta(store.analyzeEta) }}</span>
+              <!-- 취소 메시지 -->
+              <div v-if="cancelMsg" class="flex flex-col items-center gap-3">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#fbbf24" stroke-width="2" stroke-linecap="round">
+                  <circle cx="12" cy="12" r="10"/>
+                  <path d="M12 8v4"/>
+                  <path d="M12 16h.01"/>
+                </svg>
+                <div class="text-sm text-amber-300 font-semibold">{{ cancelMsg }}</div>
               </div>
+              <template v-else>
+                <!-- 진행률 숫자 -->
+                <div class="text-3xl font-bold mb-2">{{ store.analyzeProgress }}%</div>
 
-              <!-- ZIP 생성 중 메시지 -->
-              <div v-if="store.analyzePhase === 'zipping'" class="text-xs opacity-60">
-                총 {{ store.analyzeWritten }}장 · SigLIP 필터링 + ZIP 생성 중...
-              </div>
+                <!-- phase별 메시지 -->
+                <div class="text-sm opacity-90 mb-1">{{ phaseLabel }}</div>
 
-              <!-- 진행바 -->
-              <div class="mt-4 flex items-center gap-2 text-xs text-white/60">
-                <span class="text-emerald-400">✓ 추론 완료</span>
-                <span>→</span>
-                <span class="text-amber-300 animate-pulse">● SigLIP 필터링 중</span>
-                <span>→</span>
-                <span class="text-white/30">ZIP 압축</span>
-              </div>
+                <!-- 크롭 저장 수 (analyzing 중) -->
+                <div v-if="store.analyzePhase === 'analyzing'" class="text-xs opacity-60">
+                  <span v-if="store.analyzeWritten > 0">{{ store.analyzeWritten }}장의 후보</span>
+                  <span v-if="store.analyzeEta > 0" class="ml-2">· 잔여 약 {{ formatEta(store.analyzeEta) }}</span>
+                </div>
 
-              <!-- 취소 버튼 (analyzing 중에만) -->
-              <button
-                v-if="store.analyzePhase === 'analyzing'"
-                class="mt-4 px-4 py-1 text-xs bg-white/20 hover:bg-white/30 rounded"
-                @click="onCancelAnalyze"
-              >취소</button>
+                <!-- ZIP 생성 중 메시지 -->
+                <div v-if="store.analyzePhase === 'zipping'" class="text-xs opacity-60">
+                  총 {{ store.analyzeWritten }}장 · SigLIP 필터링 + ZIP 생성 중...
+                </div>
+
+                <!-- 진행바 -->
+                <div class="mt-4 flex items-center gap-2 text-xs text-white/60">
+                  <!-- 추론 -->
+                  <span :class="store.analyzePhase === 'analyzing'
+                    ? 'text-amber-300 animate-pulse'
+                    : 'text-emerald-400'">
+                    {{ store.analyzePhase === 'analyzing' ? '● 추론 중' : '✓ 추론 완료' }}
+                  </span>
+                  <span>→</span>
+                  <!-- SigLIP -->
+                  <span :class="store.analyzePhase === 'siglip'
+                    ? 'text-amber-300 animate-pulse'
+                    : ['zipping_compress', 'done'].includes(store.analyzePhase)
+                    ? 'text-emerald-400'
+                    : 'text-white/30'">
+                    {{ store.analyzePhase === 'siglip' ? '● SigLIP 필터링 중'
+                      : ['zipping_compress', 'done'].includes(store.analyzePhase) ? '✓ SigLIP 완료'
+                      : 'SigLIP 필터링' }}
+                  </span>
+                  <span>→</span>
+                  <!-- ZIP -->
+                  <span :class="store.analyzePhase === 'zipping_compress'
+                    ? 'text-amber-300 animate-pulse'
+                    : store.analyzePhase === 'done'
+                    ? 'text-emerald-400'
+                    : 'text-white/30'">
+                    {{ store.analyzePhase === 'zipping_compress' ? '● ZIP 압축 중'
+                      : store.analyzePhase === 'done' ? '✓ ZIP 완료'
+                      : 'ZIP 압축' }}
+                  </span>
+                </div>
+
+                <!-- 취소 버튼 (analyzing 중에만) -->
+                <button
+                  v-if="store.analyzePhase === 'analyzing'"
+                  class="mt-4 px-4 py-1 text-xs bg-white/20 hover:bg-white/30 rounded"
+                  @click="onCancelAnalyze"
+                >취소</button>
+              </template>
             </div>
           </div>
         </div>
@@ -168,6 +199,7 @@
       :written-counts="store.writtenCounts"
       :recent-crops="store.recentCrops"
       :filtered-crops="store.filteredCrops"
+      :cancel-token="cancelToken"
     />
   </section>
 </template>
@@ -206,6 +238,12 @@ let lastDrawTs = 0;
 
 const clearToken = ref(0);
 
+// 취소 메세지
+const cancelMsg = ref("");
+
+// 취소 전달 토큰
+const cancelToken = ref(0);
+
 // ── computed ──────────────────────────────────────────────────
 const canPlay = computed(() =>
   !!store.videoSrc && !store.isUploading && !store.isAnalyzing && store.detList.length > 0
@@ -213,8 +251,10 @@ const canPlay = computed(() =>
 
 // phase → 한글 레이블
 const phaseLabel = computed(() => {
-  if (store.analyzePhase === "zipping")   return "ZIP 생성 중";
-  if (store.analyzePhase === "done")      return "완료";
+  if (store.analyzePhase === "siglip")          return "SigLIP 필터링 중";
+  if (store.analyzePhase === "zipping_compress") return "ZIP 압축 중";
+  if (store.analyzePhase === "done")             return "완료";
+  if (store.analyzePhase === "zipping")          return "처리 중";
   return "분석 + 크롭 중";
 });
 
@@ -264,6 +304,8 @@ async function onUploaded(payload) {
 }
 
 function onCleared() {
+  cancelMsg.value = "";
+  cancelToken.value = 0
   clearToken.value += 1;
   store.cancelAnalyze();
   store.reset();
@@ -275,11 +317,6 @@ function onCleared() {
   errorMsg.value    = "";
   stopRaf();
   clearCanvas();
-}
-
-function onCancelAnalyze() {
-  store.cancelAnalyze();
-  uiState.value = "READY";
 }
 
 // ─── 비디오 이벤트 ────────────────────────────────────────────
@@ -459,6 +496,14 @@ onBeforeUnmount(() => {
   clearCanvas();
   if (ro) { ro.disconnect(); ro = null; }
 });
+
+// 취소 메세지
+function onCancelAnalyze() {
+  store.cancelAnalyze();
+  uiState.value = "READY";
+  cancelMsg.value = "생성이 취소되었습니다. 동영상 삭제 후 다시 시도하세요.";
+  cancelToken.value += 1;
+}
 </script>
 
 <style scoped>

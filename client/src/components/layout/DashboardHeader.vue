@@ -6,7 +6,7 @@
         <span class="eyebrow-line" />
         <span class="eyebrow-text">Image Auto / Manual Crop Tool</span>
       </div>
-      <h1 class="header-title">Dashboard</h1>
+      <h1 class="header-title">Occlusion Dataset Generator</h1>
     </div>
 
     <!-- Right: Mode badge + time -->
@@ -53,6 +53,7 @@ onBeforeUnmount(() => {
 
 <style scoped>
 @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@700;800;900&display=swap');
 
 .dashboard-header {
   display: flex;
@@ -98,14 +99,14 @@ onBeforeUnmount(() => {
 }
 
 .header-title {
-  font-family: 'Rajdhani', sans-serif;
-  font-size: 28px;
-  font-weight: 700;
-  letter-spacing: 0.03em;
+  font-family: 'Noto Sans KR', 'Apple SD Gothic Neo', sans-serif;
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
   color: #0f172a;
-  line-height: 1;
+  line-height: 1.2;
   margin: 0;
-  text-transform: uppercase;
+  word-break: keep-all;
 }
 
 /* ── Right ──────────────────────── */

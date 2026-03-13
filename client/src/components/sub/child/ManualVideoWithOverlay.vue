@@ -2,7 +2,6 @@
   <div class="card h-full flex flex-col">
     <div class="flex items-center justify-between mb-2">
       <div class="text-sm font-semibold">Video</div>
-      <div class="text-xs text-slate-500">Slot {{ slotName }}</div>
     </div>
 
     <div ref="wrapEl" class="video-wrap" style="height: 620px;">

@@ -155,6 +155,17 @@ export const usePlaybackCropStore = defineStore("playbackCrop", {
             return;
           }
 
+          // 처리 과정 관련
+          if (msg.type === "siglip") {
+              this.analyzePhase = "siglip"
+              this.analyzeWritten = msg.written ?? this.analyzeWritten
+              return
+          }
+          if (msg.type === "zipping_compress") {
+              this.analyzePhase = "zipping_compress"
+              return
+          }
+
           // ── done ──────────────────────────────────────
           if (msg.type === "done") {
             this.analyzeProgress = 100;

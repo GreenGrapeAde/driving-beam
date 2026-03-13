@@ -605,11 +605,19 @@ async def analyze_video(ws: WebSocket):
         await ws.send_text(json.dumps({"type": "zipping", "progress": 99, "written": written}))
         await asyncio.sleep(0)
 
-        # ── SigLIP 필터링 ★
+        # ── SigLIP 시작 알림
+        await ws.send_text(json.dumps({"type": "siglip", "written": written}))
+        await asyncio.sleep(0)
+
+        # ── SigLIP 필터링
         verifier = AmodalVerifier.get()
         _, passed, removed, removed_ids = await asyncio.to_thread(
             verifier.filter_dataset, ds_root, 128
         )
+
+        # ZIP 압축 시작 알림
+        await ws.send_text(json.dumps({"type": "zipping_compress", "written": written}))
+        await asyncio.sleep(0)
 
         # ── 필터링 후 meta_samples 정합성 ★
         remaining_ids = {
