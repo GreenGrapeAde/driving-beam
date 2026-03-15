@@ -27,12 +27,17 @@ export const useLiveCropStore = defineStore("liveCrop", {
       this._startPoll();
     },
 
-    stopLive() {
+    async stopLive() {
+      this.exportMsg   = "";
       this.isStreaming = false;
       this.streamUrl   = "";
       this.errorMsg    = "";
       this._stopDetWs();
       this._stopPoll();
+      // 서버에 stop 신호
+      try {
+        await fetch(`${API_BASE}/live/stop`, { method: "POST" });
+      } catch {}
     },
 
     onStreamError() {
@@ -56,7 +61,7 @@ export const useLiveCropStore = defineStore("liveCrop", {
         const blob = await dl.blob();
         const url  = URL.createObjectURL(blob);
         const a    = document.createElement("a");
-        a.href = url; a.download = "live_dataset.zip";
+        a.href = url; a.download = data.zip_name || "live_dataset.zip";
         document.body.appendChild(a); a.click(); a.remove();
         URL.revokeObjectURL(url);
         this.exportMsg = `완료 · ${data.written}장 다운로드됨`;

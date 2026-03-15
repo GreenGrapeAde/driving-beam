@@ -314,7 +314,7 @@ class AmodalVerifier:
 
         total = len(image_paths)
         if total == 0:
-            return 0, 0, 0
+            return 0, 0, 0, set()
 
         removed_stems: set = set()
         day_queue, night_queue = [], []
@@ -568,7 +568,7 @@ async def analyze_video(ws: WebSocket):
                         # "thumb":         thumb_b64,
                     })
 
-                    if len(recent_thumbs) < 30:   # ★ 추가
+                    if len(recent_thumbs) < 30:
                         recent_thumbs.append({
                             "id":         f"sample_{img_idx:06d}",
                             "class_name": det.get("cls", ""),
@@ -619,7 +619,7 @@ async def analyze_video(ws: WebSocket):
         await ws.send_text(json.dumps({"type": "zipping_compress", "written": written}))
         await asyncio.sleep(0)
 
-        # ── 필터링 후 meta_samples 정합성 ★
+        # ── 필터링 후 meta_samples 정합성
         remaining_ids = {
             p.stem
             for split in ["train", "valid", "test"]
@@ -627,7 +627,7 @@ async def analyze_video(ws: WebSocket):
         }
         meta_samples = [s for s in meta_samples if s["id"] in remaining_ids]
 
-        # ── written_counts (필터링 후 기준) ★
+        # ── written_counts (필터링 후 기준)
         written_counts: Dict[str, int] = {}
         for s in meta_samples:
             cls = s["class_name"]
@@ -782,7 +782,6 @@ async def manual_extract(request: Request, payload: dict):
     if (not video_path) or (roi is None) or (t_sec is None):
         return {"ok": False, "error": "missing parameters"}
 
-    # ROI ? íš¨??ì²´í¬
     try:
         if float(roi.get("w", 0)) <= 0 or float(roi.get("h", 0)) <= 0:
             return {"ok": False, "error": "ROI required"}
@@ -812,7 +811,6 @@ async def manual_extract(request: Request, payload: dict):
     frame_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     frame_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-    # display -> frame ROI ë³€??
     if disp_w and disp_h:
         try:
             roi_frame = _convert_roi(roi, frame_w, frame_h, float(disp_w), float(disp_h))
@@ -822,10 +820,8 @@ async def manual_extract(request: Request, payload: dict):
     else:
         roi_frame = roi
 
-    # ?œìž‘ ?œì  ?´ë™
     cap.set(cv2.CAP_PROP_POS_MSEC, start_sec * 1000.0)
 
-    # tì´??™ì•ˆ "?°ì†" ?„ë ˆ????= t * 30
     total_frames = max(int(round(t_sec_f * fps)), 1)
 
     x = int(roi_frame["x"]); y = int(roi_frame["y"])
@@ -839,7 +835,6 @@ async def manual_extract(request: Request, payload: dict):
 
     previews: List[str] = []
 
-    # ?€?¥ì? ???˜ê³  previewë§?ë§Œë“ ??
     for _ in range(total_frames):
         ret, frame = cap.read()
         if not ret:
@@ -854,7 +849,6 @@ async def manual_extract(request: Request, payload: dict):
 
     cap.release()
 
-    # cache ?€??app.state)
     st.manual.previews = previews
     st.manual.total = len(previews)
 
@@ -866,8 +860,8 @@ async def manual_extract(request: Request, payload: dict):
 
     return {
         "ok": True,
-        "total": st.manual.total,       # ?•ìƒ?´ë©´ t=1 -> 30
-        "items": previews,              # ê·¸ë¦¬?œë¡œ ë°”ë¡œ ë³´ì—¬ì£¼ê¸° ?¸í•˜ê²??„ì²´ ë°˜í™˜
+        "total": st.manual.total,
+        "items": previews, 
         "roiFrame": {"x": x, "y": y, "w": w, "h": h},
         "startSec": start_sec,
         "requestedFrames": total_frames,
@@ -965,15 +959,64 @@ class LiveState:
         self.tmp_dir   = ""
         self.img_idx   = 0
         self.written   = 0
+        self.ds_name = ""
 
+# live 저장용 ==========================
+def _crop_and_save_live(frame, det, frame_w, frame_h, target_line,
+                        ds_root, img_idx) -> bool:
+    occ_cls = _coco_to_occ(det.get("cls"))
+    if occ_cls is None:
+        return False
+
+    ox1, oy1 = int(det["x1"]), int(det["y1"])
+    ox2, oy2 = int(det["x2"]), int(det["y2"])
+
+    if (ox1 + ox2) // 2 > target_line:
+        return False
+
+    cls_name = det.get("cls", "").lower()
+    box_h    = oy2 - oy1
+    ext_y2   = int(oy1 + box_h * (4.0 if cls_name == "car" else 1.8))
+
+    cx1 = max(0, ox1);       cy1 = max(0, oy1)
+    cx2 = min(frame_w, ox2); cy2 = min(frame_h, ext_y2)
+    if cx2 <= cx1 or cy2 <= cy1:
+        return False
+
+    crop = frame[cy1:cy2, cx1:cx2]
+    if crop.size == 0:
+        return False
+
+    if _is_duplicate(crop, ds_root):
+        return False
+
+    stem       = f"sample_{img_idx:06d}"
+    img_p      = os.path.join(ds_root, "images",      f"{stem}.jpg")
+    img_full_p = os.path.join(ds_root, "images_full", f"{stem}.jpg")
+    lbl_p      = os.path.join(ds_root, "labels",      f"{stem}.txt")
+
+    if not cv2.imwrite(img_p, crop):
+        return False
+
+    cv2.imwrite(img_full_p, frame)
+
+    yolo = _bbox_to_yolo(ox1, oy1, ox2, oy2, cx1, cy1, cx2-cx1, cy2-cy1)
+    if yolo is None:
+        os.remove(img_p)
+        return False
+
+    with open(lbl_p, "w") as f:
+        f.write(f"{occ_cls} {yolo}\n")
+
+    return True
+
+# ── 백그라운드 스레드: 캡처 + 추론 + 크롭 저장 ──────────────
 live_state     = LiveState()
 _capture_thread = None
 
-# ── 백그라운드 스레드: 캡처 + 추론 + 크롭 저장 ──────────────
 def _capture_loop(model_mgr, cap_index=1):
     import time as _time
     cap = cv2.VideoCapture(cap_index, cv2.CAP_DSHOW)
-    # cap = cv2.VideoCapture(r"C:\Users\choju\Desktop\image_video\Video\야간_고속도로.mp4")
 
     # 워밍업
     t0 = _time.time()
@@ -989,11 +1032,16 @@ def _capture_loop(model_mgr, cap_index=1):
     created_at = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     ds_root    = os.path.join(tmp_dir, f"live_dataset_{created_at}")
     os.makedirs(ds_root, exist_ok=True)
-    _ensure_dirs(ds_root)
-    _write_dataset_yaml(ds_root)
+    # _ensure_dirs, _write_dataset_yaml 대신
+    os.makedirs(os.path.join(ds_root, "images"), exist_ok=True)
+    os.makedirs(os.path.join(ds_root, "images_full"), exist_ok=True)
+    os.makedirs(os.path.join(ds_root, "labels"), exist_ok=True)
+    with open(os.path.join(ds_root, "dataset.yaml"), "w") as f:
+        f.write("path: .\ntrain: images\n\nnames:\n  0: car\n  1: bus\n  2: truck\n")
 
     with live_state.lock:
         live_state.ds_root  = ds_root
+        live_state.ds_name  = f"live_dataset_{created_at}"
         live_state.tmp_dir  = tmp_dir
         live_state.img_idx  = 0
         live_state.written  = 0
@@ -1008,17 +1056,16 @@ def _capture_loop(model_mgr, cap_index=1):
         if not ret or frame is None:
             _time.sleep(0.01)
             continue
-        
+
         frame_count += 1
 
         if frame_count % 5 != 0:
             with live_state.lock:
-                live_state.annotated = frame.copy()  # 박스 없이 원본만 업데이트
+                live_state.annotated = frame.copy()
             continue
-    
+
         dets = model_mgr.run_ai_inference(frame)
 
-        # annotated 프레임 생성
         annotated = frame.copy()
         for d in dets:
             cv2.rectangle(annotated, (d["x1"], d["y1"]), (d["x2"], d["y2"]), (0, 255, 0), 2)
@@ -1026,11 +1073,11 @@ def _capture_loop(model_mgr, cap_index=1):
                         (d["x1"], d["y1"] - 5),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
 
-        # 크롭 저장
+        # _crop_and_save_live 사용
         with live_state.lock:
             img_idx = live_state.img_idx
             for det in dets:
-                ok, _ = _crop_and_save(
+                ok = _crop_and_save_live(
                     frame, det, frame_w, frame_h, target_line,
                     live_state.ds_root, img_idx,
                 )
@@ -1061,6 +1108,17 @@ def _start_capture(model_mgr, cap_index=1):
 
 def _stop_capture():
     live_state.running = False
+    with live_state.lock:
+        tmp_dir = live_state.tmp_dir
+        ds_root = live_state.ds_root
+        live_state.ds_root = ""
+        live_state.tmp_dir = ""
+        live_state.img_idx = 0
+        live_state.written = 0
+    if tmp_dir:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+    if ds_root:
+        _clear_dedup_cache(ds_root)
 
 
 # ── MJPEG 스트리밍 ───────────────────────────────────────────
@@ -1140,6 +1198,7 @@ async def live_written():
 async def live_export():
     with live_state.lock:
         ds_root = live_state.ds_root
+        ds_name = live_state.ds_name
         tmp_dir = live_state.tmp_dir
         written = live_state.written
 
@@ -1147,8 +1206,7 @@ async def live_export():
         raise HTTPException(status_code=400, detail="저장된 이미지가 없습니다.")
 
     export_dir = os.getenv("EXPORT_DIR", "exports")
-    created_at = datetime.now().strftime("%Y%m%d_%H%M%S")
-    zip_name   = f"live_dataset_{created_at}.zip"
+    zip_name = f"{ds_name}.zip"
     zip_path   = os.path.join(export_dir, zip_name)
 
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -1157,4 +1215,10 @@ async def live_export():
                 abs_p = os.path.join(rd, fn)
                 zf.write(abs_p, os.path.relpath(abs_p, tmp_dir))
 
-    return {"download_url": f"/export_download/{zip_name}", "written": written}
+    return {"download_url": f"/export_download/{zip_name}", "written": written, "zip_name": zip_name}
+
+# ── 라이브 stop ─────────────────────────────────────────────
+@router.post("/live/stop")
+async def live_stop():
+    _stop_capture()
+    return {"ok": True}

@@ -1,6 +1,11 @@
 ﻿<template>
   <div class="app-shell">
-    <Sidebar :mode="mode" @update:mode="mode = $event" @reset=reload />
+    <Sidebar 
+      :mode="mode" 
+      :is-streaming="liveStore.isStreaming"
+      @update:mode="mode = $event" 
+      @reset="reload" 
+    />
 
   <main class="content">
     <div class="content-body">         <!-- 이 안에서만 스크롤 -->
@@ -22,7 +27,9 @@ import DashboardHeader from "./components/layout/DashboardHeader.vue";
 import ManualCrop from "./components/dashboard/ManualCrop.vue";
 import LiveView from "./components/dashboard/LiveView.vue";
 import PlaybackView from "./components/dashboard/PlaybackView.vue";
+import { useLiveCropStore } from "@/liveCrop"
 
+const liveStore = useLiveCropStore()
 const mode = ref("playback"); // 'live' | 'playback' | 'manual'
 
 function reload() {

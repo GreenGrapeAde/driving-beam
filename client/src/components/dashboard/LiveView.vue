@@ -4,7 +4,7 @@
       <div class="flex items-center justify-between gap-3 mb-3">
         <div>
           <div class="text-sm text-slate-500">Live</div>
-          <div class="text-lg font-bold">실시간 스트리밍</div>
+          <div class="text-lg font-bold">Real-Time Streaming</div>
         </div>
         <div class="flex items-center gap-3 text-xs">
           <span class="inline-flex items-center gap-1.5">
@@ -37,10 +37,11 @@
             </div>
             <div class="ph-right">
               <svg width="140" height="168" viewBox="0 0 54 64" fill="none">
-                <rect x="2" y="2" width="42" height="54" rx="5" fill="#dbeafe" stroke="#93c5fd" stroke-width="2"/>
-                <path d="M30 2 L44 16 L30 16 Z" fill="#93c5fd"/>
-                <circle cx="39" cy="49" r="13" fill="#2563eb"/>
-                <polygon points="35,44 35,54 47,49" fill="white"/>
+                <rect x="2" y="2" width="42" height="54" rx="5" fill="#fee2e2" stroke="#fca5a5" stroke-width="2"/>
+                <path d="M30 2 L44 16 L30 16 Z" fill="#fca5a5"/>
+                <circle cx="39" cy="49" r="13" fill="#dc2626"/>
+                <!-- 녹화 버튼 (원) -->
+                <circle cx="39" cy="49" r="5" fill="white"/>
               </svg>
             </div>
           </div>
@@ -58,7 +59,10 @@
                   @click="store.exportZip()">
             ZIP 다운로드
           </button>
-          <span v-if="store.exportMsg" class="text-emerald-600">{{ store.exportMsg }}</span>
+          <span v-if="store.exportMsg" 
+                :class="store.exportMsg.startsWith('실패') ? 'text-rose-600' : 'text-emerald-600'">
+            {{ store.exportMsg }}
+          </span>
         </div>
       </div>
     </div>

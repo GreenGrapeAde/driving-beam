@@ -48,7 +48,7 @@
           </svg>
         </span>
         <span class="nav-label">Live</span>
-        <span v-if="mode === 'live'" class="live-badge">
+        <span v-if="isStreaming" class="live-badge">
           <span class="live-dot" />
           ON AIR
         </span>
@@ -85,8 +85,8 @@
         <span class="status-text">{{ serverOnline ? 'SERVER ONLINE' : 'SERVER OFFLINE' }}</span>
       </div>
       <div class="status-row">
-        <span class="status-dot" />
-        <span class="status-text">Camera Inactive</span>
+        <span class="status-dot" :class="isStreaming ? 'active' : 'inactive'" />
+        <span class="status-text">{{ isStreaming ? 'Camera Active' : 'Camera Inactive' }}</span>
       </div>
     </div>
   </aside>
@@ -119,6 +119,7 @@ onBeforeUnmount(() => {
 
 defineProps({
   mode: { type: String, required: true },
+  isStreaming: { type: Boolean, default: false },
 });
 defineEmits(["update:mode", "reset"]);
 </script>

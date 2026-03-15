@@ -68,7 +68,7 @@
             <div class="ph-left">
               <div class="ph-title">동영상 분석 및<br>데이터셋 추출</div>
               <div class="ph-desc">
-                동영상을 업로드하면 AI가 자동으로<br>분석하고 Occlusion 상황의 데이터셋을<br>생성할 수 있습니다.
+                동영상을 업로드하면 AI가 자동으로<br>분석 후 Occlusion 데이터셋을<br>생성합니다.
               </div>
             </div>
             <!-- 우측 아이콘 -->

@@ -11,7 +11,7 @@
       <div class="flex items-center justify-between gap-3 mb-3">
         <div>
           <div class="text-sm text-slate-500">Manual Crop</div>
-          <div class="text-lg font-bold">Single Video Playback</div>
+          <div class="text-lg font-bold">Video Playback</div>
         </div>
       </div>
 
