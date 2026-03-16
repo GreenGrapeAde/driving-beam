@@ -93,14 +93,14 @@ def _filter_large_boxes(dets, frame_w, frame_h, max_area_ratio=0.5):
 class ModelManager:
     def __init__(self):
         self.model_kind         = os.getenv("MODEL_KIND", "RTDETR")
-        self.model_path         = os.getenv("MODEL_PATH", "rtdetr-l.pt")
+        self.model_path         = os.getenv("MODEL_PATH", r"..\AI\JK_2\no3_binary_model_A1004\weights\best.pt")
         self.model_imgsz        = int(os.getenv("MODEL_IMGSZ", "640"))
-        self.model_conf         = float(os.getenv("MODEL_CONF", "0.35"))
+        self.model_conf         = float(os.getenv("MODEL_CONF", "0.5"))
         self.model_iou          = float(os.getenv("MODEL_IOU", "0.3"))
         self.post_nms_iou       = float(os.getenv("POST_NMS_IOU", "0.4"))
         self.max_box_area_ratio = float(os.getenv("MAX_BOX_AREA_RATIO", "0.5"))
-        ## 2: 차, 5: 버스, 7: 트럭
-        _cls = os.getenv("TARGET_CLASSES", "2,5,7")
+        ## 0: normal, 1: occluded
+        _cls = os.getenv("TARGET_CLASSES", "1")
         self.target_classes = [int(c.strip()) for c in _cls.split(",")]
         self.device = "cuda:0" if torch.cuda.is_available() else "cpu"
         self._model = None
@@ -189,7 +189,7 @@ def _ensure_dirs(root):
 def _write_dataset_yaml(root):
     with open(os.path.join(root, "dataset.yaml"), "w") as f:
         f.write("path: .\ntrain: train/images\nval: valid/images\ntest: test/images\n\n"
-                "names:\n  0: car\n  1: bus\n  2: truck\n")
+                "names:\n  0: normal_vehicle\n  1: occluded_vehicle")
 
 def _write_readme(root, stats):
     with open(os.path.join(root, "README.txt"), "w") as f:
@@ -197,9 +197,8 @@ def _write_readme(root, stats):
 
 def _coco_to_occ(cls_name):
     n = (cls_name or "").lower()
-    if n == "car":   return 0
-    if n == "bus":   return 1
-    if n == "truck": return 2
+    # if n == "normal":   return 0
+    if n == "occluded_vehicle": return 1
     return None
 
 def _pick_split(idx):
@@ -331,13 +330,17 @@ class AmodalVerifier:
 
             # heuristic 필터
             if h < 50 or w < 50:
+                print(f"[REMOVE:abs_size]")
                 self._remove_sample(img_path, removed_stems); continue
             if cv2.Laplacian(gray, cv2.CV_64F).var() < 30.0:
+                print(f"[REMOVE:blur]")
                 self._remove_sample(img_path, removed_stems); continue
             if (w / h) < 1.1:
+                print(f"[REMOVE:ratio]")
                 self._remove_sample(img_path, removed_stems); continue
             if is_night and self._get_red_ratio(
                     cv2.cvtColor(cv_img, cv2.COLOR_BGR2HSV)) > 5.0:
+                print(f"[REMOVE:red]")
                 self._remove_sample(img_path, removed_stems); continue
 
             pil_img = Image.fromarray(cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB))
@@ -390,12 +393,9 @@ def _crop_and_save(frame, det, frame_w, frame_h, target_line,
     if (ox1 + ox2) // 2 > target_line:
         return False, ""
 
-    cls_name = det.get("cls", "").lower()
-    box_h    = oy2 - oy1
-    ext_y2   = int(oy1 + box_h * (4.0 if cls_name == "car" else 1.8))
-
     cx1 = max(0, ox1);       cy1 = max(0, oy1)
-    cx2 = min(frame_w, ox2); cy2 = min(frame_h, ext_y2)
+    cx2 = min(frame_w, ox2); cy2 = min(frame_h, oy2)
+
     if cx2 <= cx1 or cy2 <= cy1:
         return False, ""
 
@@ -609,12 +609,17 @@ async def analyze_video(ws: WebSocket):
         await ws.send_text(json.dumps({"type": "siglip", "written": written}))
         await asyncio.sleep(0)
 
+        ## ===================================================================================
         # ── SigLIP 필터링
         verifier = AmodalVerifier.get()
         _, passed, removed, removed_ids = await asyncio.to_thread(
             verifier.filter_dataset, ds_root, 128
         )
 
+        # SigLIP 끈 경우 기본값
+        # passed, removed, removed_ids = written, 0, set()
+        ## ===================================================================================
+        
         # ZIP 압축 시작 알림
         await ws.send_text(json.dumps({"type": "zipping_compress", "written": written}))
         await asyncio.sleep(0)
@@ -974,12 +979,9 @@ def _crop_and_save_live(frame, det, frame_w, frame_h, target_line,
     if (ox1 + ox2) // 2 > target_line:
         return False
 
-    cls_name = det.get("cls", "").lower()
-    box_h    = oy2 - oy1
-    ext_y2   = int(oy1 + box_h * (4.0 if cls_name == "car" else 1.8))
-
     cx1 = max(0, ox1);       cy1 = max(0, oy1)
-    cx2 = min(frame_w, ox2); cy2 = min(frame_h, ext_y2)
+    cx2 = min(frame_w, ox2); cy2 = min(frame_h, oy2)
+
     if cx2 <= cx1 or cy2 <= cy1:
         return False
 
@@ -1017,6 +1019,7 @@ _capture_thread = None
 def _capture_loop(model_mgr, cap_index=1):
     import time as _time
     cap = cv2.VideoCapture(cap_index, cv2.CAP_DSHOW)
+    # cap = cv2.VideoCapture(r"C:\Users\choju\Desktop\image_video\Video\videoplayback.mp4")
 
     # 워밍업
     t0 = _time.time()
@@ -1037,7 +1040,7 @@ def _capture_loop(model_mgr, cap_index=1):
     os.makedirs(os.path.join(ds_root, "images_full"), exist_ok=True)
     os.makedirs(os.path.join(ds_root, "labels"), exist_ok=True)
     with open(os.path.join(ds_root, "dataset.yaml"), "w") as f:
-        f.write("path: .\ntrain: images\n\nnames:\n  0: car\n  1: bus\n  2: truck\n")
+        f.write("path: .\ntrain: images\n\nnames:\n  0: normal_vehicle\n  1: occluded_vehicle")
 
     with live_state.lock:
         live_state.ds_root  = ds_root
@@ -1059,7 +1062,7 @@ def _capture_loop(model_mgr, cap_index=1):
 
         frame_count += 1
 
-        if frame_count % 5 != 0:
+        if frame_count % 10 != 0:
             with live_state.lock:
                 live_state.annotated = frame.copy()
             continue

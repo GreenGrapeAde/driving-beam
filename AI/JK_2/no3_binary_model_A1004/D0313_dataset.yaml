@@ -1,0 +1,8 @@
+path: C:/Users/wornj/KDT_10SL/newmodel/dataset  # 데이터셋 최상위 폴더
+train: images/train
+val: images/val
+
+nc: 2  # 6에서 2로 변경!
+names:
+  0: normal_vehicle
+  1: occluded_vehicle

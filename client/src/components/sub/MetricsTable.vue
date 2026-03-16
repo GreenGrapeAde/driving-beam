@@ -21,7 +21,7 @@
             />
             <span class="absolute bottom-1 left-1 text-[10px] font-bold px-1 rounded"
                   :style="{ background: classColor(item.class_name), color: '#fff' }">
-              {{ item.class_name }}
+              {{ item.class_name === 'occluded_vehicle' ? 'occ' : item.class_name }}
             </span>
             <!-- 제거 표시 -->
             <div v-if="analyzePhase === 'done' && isRemoved(item.id)"
@@ -53,7 +53,7 @@
             />
             <span class="absolute bottom-1 left-1 text-[10px] font-bold px-1 rounded"
                   :style="{ background: classColor(item.class_name), color: '#fff' }">
-              {{ item.class_name }}
+              {{ item.class_name === 'occluded_vehicle' ? 'occ' : item.class_name }}
             </span>
           </div>
         </div>
@@ -181,7 +181,9 @@ watch(() => props.clearToken, () => {
 
 // ── 유틸 ────────────────────────────────────────────────────
 function classColor(cls) {
-  return { car: "#3b82f6", bus: "#f59e0b", truck: "#10b981" }[cls] ?? "#94a3b8";
+  return {
+    occluded_vehicle: "#3b82f6",
+  }[cls] ?? "#94a3b8";
 }
 
 // ── 생성 취소 ────────────────────────────────────────────────────

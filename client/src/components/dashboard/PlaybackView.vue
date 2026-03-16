@@ -447,7 +447,7 @@ function updateOverlay() {
 
   const t_ms_now = (v.currentTime || 0) * 1000;
   const match    = selectNearestDet(t_ms_now);
-  const dets     = match?.detections ?? [];
+  const dets = (match?.detections ?? []).filter(d => d.cls !== "normal_vehicle")
   lastDets.value = dets;
 
   ctx.lineWidth = 2;
