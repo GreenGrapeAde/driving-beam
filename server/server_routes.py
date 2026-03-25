@@ -256,7 +256,7 @@ class AmodalVerifier:
         self.model     = AutoModel.from_pretrained(model_id).to(self.device).eval()
         self.processor = AutoProcessor.from_pretrained(model_id)
         self.positive_prompts = [
-            "a 0clear photo of a car roof visible above a barrier",
+            "a clear photo of a car roof visible above a barrier",
             "the top half of a truck or bus peeking over a wall",
         ]
         self.common_negative = [
@@ -1062,7 +1062,7 @@ def _capture_loop(model_mgr, cap_index=1):
 
         frame_count += 1
 
-        if frame_count % 10 != 0:
+        if frame_count % 3 != 0:
             with live_state.lock:
                 live_state.annotated = frame.copy()
             continue
